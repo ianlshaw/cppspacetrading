@@ -1,0 +1,13 @@
+
+check_server_status
+*.plist
+includetest
+miningfleet
+post
+*.token
+testlibcurl
+registeragent
+registeragent.cpp
+testlibcurl.cpp
+includetest.cpp
+post.cpp
