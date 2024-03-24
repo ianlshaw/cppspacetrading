@@ -11,3 +11,5 @@ registeragent.cpp
 testlibcurl.cpp
 includetest.cpp
 post.cpp
+/curio.dSYM
+curio
