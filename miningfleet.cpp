@@ -36,12 +36,12 @@ void print_json(json jsonObject){
 
 void populate_target_resource(string tradeSymbol){
   targetResource = tradeSymbol;
-  cout << "targetResource updated to: " << targetResource << endl;
+  cout << "[INFO] targetResource updated to: " << targetResource << endl;
 }
 
 void populate_target_contract_id(string contractId){
   targetContractId = contractId;
-  cout << "targetContractId updated to: " << targetContractId << endl;
+  cout << "[INFO] targetContractId updated to: " << targetContractId << endl;
 }
 
 bool does_auth_file_exist(const string& authTokenFile) {
@@ -66,14 +66,10 @@ string read_auth_token_from_file(const string authTokenFile){
     return wholeDocument;
 }
 
+json http_post(const string endpoint, const json payload = {}){
+    cout << "[INFO] Sending POST request to " << endpoint << endl;
 
-
-void http_post(const string endpoint, const json payload = {}){
-    // so we can see whats going on
-    cout << "POST-ing to:" << endl;
-    cout << endpoint << endl;
-    //
-
+    // initialize libcurl
     CURL *curl;
     CURLcode res;
 
@@ -86,14 +82,14 @@ void http_post(const string endpoint, const json payload = {}){
         //curl_easy_setopt(curl, CURLOPT_POST, 1L);
         
         /* ask libcurl to show us the verbose output */
-        curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+        //curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
 
        // POSTFIELDS 
        if (payload.empty()){
-           cout << "payload is empty" << endl;
+           //cout << "[DEBUG] payload is empty" << endl;
            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "");
        } else {
-           cout << "payload is not empty" << endl;
+           //cout << "[DEBUG] payload is not empty" << endl;
            string payload_as_string = payload.dump();
            cout << payload_as_string.c_str() << endl;
            //long payloadLength = strlen(payload_as_string.c_str());
@@ -151,10 +147,10 @@ void http_post(const string endpoint, const json payload = {}){
        // always reset curl handle after use   
        curl_easy_reset(curl);
 
-       // this wll be moved once we start reusing this function
-       curl_easy_cleanup(curl);
-
+       return output_as_json; 
      }
+    json null_json = {};
+    return null_json;
 }
 
 void write_auth_token_to_file(const string token){
@@ -182,94 +178,70 @@ void register_agent() {
     json register_agent_json_object = {};
     register_agent_json_object["symbol"] = callsign;
     register_agent_json_object["faction"] = faction;
-    http_post("https://api.spacetraders.io/v2/register", register_agent_json_object);
-    //json result = http_post("https://api.spacetraders.io/v2/register", payload);
+    json result = http_post("https://api.spacetraders.io/v2/register", register_agent_json_object);
+    write_auth_token_to_file(result["data"]["token"]);
+}
 
+json http_get(const string endpoint){
+    cout << "[INFO] Sending GET request to " << endpoint << endl;
+    CURL *curl;
+    CURLcode res;
+
+    /* In windows, this inits the winsock stuff */
+    curl_global_init(CURL_GLOBAL_ALL);
+
+    /* get a curl handle */
+    curl = curl_easy_init();
+    if(curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
+        struct curl_slist *headers = NULL;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        string auth_token_header = "Authorization: Bearer " + read_auth_token_from_file(callsign + ".token");
+        headers = curl_slist_append(headers, auth_token_header.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        long httpCode(0);
+        std::unique_ptr<std::string> httpData(new std::string());
+
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, httpData.get());
+   
+           
+        /* Perform the request, res gets the return code */
+        res = curl_easy_perform(curl);
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+
+        /* Check for errors */
+        if(res != CURLE_OK)
+          fprintf(stderr, "curl_easy_perform() failed: %s\n",
+                curl_easy_strerror(res));
+
+        // parse the response body into a json object.
+        json output_as_json = json::parse(*httpData);
+
+        //cout << "[DEBUG] curl easy reset" << endl; 
+        curl_easy_reset(curl);
+        return output_as_json;
+    }
+    json null_json = {};
+    return null_json;
 }
 
 void populate_contract_globals(){
-     cout << "[INFO] Checking starter contract for starter resource" << endl;
-     CURL *curl;
-     CURLcode res;
-   
-     /* In windows, this inits the winsock stuff */
-     curl_global_init(CURL_GLOBAL_ALL);
-   
-     /* get a curl handle */
-     curl = curl_easy_init();
-     if(curl) {
-       curl_easy_setopt(curl, CURLOPT_URL, "https://api.spacetraders.io/v2/my/contracts");
-   
-       struct curl_slist *headers = NULL;
-       headers = curl_slist_append(headers, "Content-Type: application/json");
-       string auth_token_header = "Authorization: Bearer " + read_auth_token_from_file(callsign + ".token");
-       headers = curl_slist_append(headers, auth_token_header.c_str());
+    json result = http_get("https://api.spacetraders.io/v2/my/contracts");
+    
+    string resource = result["data"][0]["terms"]["deliver"][0]["tradeSymbol"];
+    populate_target_resource(resource);
 
-
-       curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-   
-       long httpCode(0);
-       std::unique_ptr<std::string> httpData(new std::string());
-
-       curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
-       curl_easy_setopt(curl, CURLOPT_WRITEDATA, httpData.get());
-   
-          
-       /* Perform the request, res gets the return code */
-       res = curl_easy_perform(curl);
-       curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-                    
-   
-       if (httpCode != 200) {
-         cout << "!!! ERROR !!!" << endl;
-         cout << "HTTP RETURN CODE:" << endl;
-         cout << httpCode << endl;
-         cout << "HTTP BODY:" << endl;
-         json output_as_json = json::parse(*httpData);
-         int indent = 4;
-         string pretty_json = output_as_json.dump(indent);
-         cout << pretty_json;
-         exit(1);
-       }
-
-       /* Check for errors */
-       if(res != CURLE_OK)
-         fprintf(stderr, "curl_easy_perform() failed: %s\n",
-               curl_easy_strerror(res));
-
-   
-       // parse the response body into a json object.
-       json output_as_json = json::parse(*httpData);
-
-       json data = output_as_json["data"];
-       
-       // Populate global variables for starter contract
-       string resource = data[0]["terms"]["deliver"][0]["tradeSymbol"];
-       populate_target_resource(resource);
-
-       string contractId = data[0]["id"];
-       populate_target_contract_id(contractId);
-
-
-       // Remove this once it works
-       int indent = 4;
-       string pretty_json = data.dump(indent);
-       cout << pretty_json;
-       //
-
-
-       cout << "curl easy reset" << endl; 
-       curl_easy_reset(curl);
-     }
+    string contractId = result["data"][0]["id"];
+    populate_target_contract_id(contractId);
 }
 
 void acceptContract(const string contractId) {
-    cout << "attempting to accept contract " + contractId << endl;
+    cout << "[INFO] Attempting to accept contract " + contractId << endl;
     string endpoint = "https://api.spacetraders.io/v2/my/contracts/" + contractId + "/accept";
     http_post(endpoint);
     //print_json(result);
 }
-
 
 void useful_but_not_yet(){
 //    if (httpCode != 201) {
@@ -288,9 +260,10 @@ void useful_but_not_yet(){
 int main(void)
 {
   register_agent();
-  return 0;
   populate_contract_globals();
   acceptContract(targetContractId);
+  // there is currently no curl easy cleanup. i think there needs to be exactly 1. 
+  // so right now my inclination is to curl easy init once globally instead of in each http_ function.
   curl_global_cleanup();
   return 0;
 }
