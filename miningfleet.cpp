@@ -15,8 +15,9 @@ string callsign;
 
 json contracts_list;
 json target_contract;
-
+string target_resource;
 string asteroid_belt_symbol;
+float survey_score_threshold = 0.5;
 
 namespace
 {
@@ -32,6 +33,14 @@ namespace
     }
 }
 
+class survey {       // The class
+  public:             // Access specifier
+    float score;        // Attribute (int variable)
+    json surveyObject;  // Attribute (string variable)
+};
+
+vector <survey> surveys;
+
 void print_json(json jsonObject){
     int indent = 4;
     string pretty_json = jsonObject.dump(indent);
@@ -39,12 +48,12 @@ void print_json(json jsonObject){
 }
 
 bool does_auth_file_exist(const string& authTokenFile) {
-    cout << "[INFO] Checking for existence of " << authTokenFile << endl;
+    //cout << "[INFO] Checking for existence of " << authTokenFile << endl;
     if (std::__fs::filesystem::exists(authTokenFile)){
-        cout << "[INFO] Auth file found\n";
+        //cout << "[INFO] Auth file found\n";
         return true;
     } else {
-        cout << "[INFO] Auth file not found\n";
+        //cout << "[INFO] Auth file not found\n";
         return false;
     }
 }
@@ -61,7 +70,7 @@ string read_auth_token_from_file(const string authTokenFile){
 }
 
 json http_post(const string endpoint, const json payload = {}){
-    cout << "[INFO] Sending POST request to " << endpoint << endl;
+    //cout << "[INFO] Sending POST request to " << endpoint << endl;
 
     // initialize libcurl
     CURL *curl;
@@ -136,7 +145,7 @@ json http_post(const string endpoint, const json payload = {}){
        json output_as_json = json::parse(*httpData);
 
        // for now just print the result to stdout
-       print_json(output_as_json);
+       //print_json(output_as_json);
 
        // always reset curl handle after use   
        curl_easy_reset(curl);
@@ -175,7 +184,7 @@ void registerAgent(const string callsign) {
 }
 
 json http_get(const string endpoint){
-    cout << "[INFO] Sending GET request to " << endpoint << endl;
+    //cout << "[INFO] Sending GET request to " << endpoint << endl;
     CURL *curl;
     CURLcode res;
 
@@ -217,10 +226,14 @@ json http_get(const string endpoint){
     return null_json;
 }
 
-json getShip(const string shipSymbol){
-    string endpoint = "https://api.spacetraders.io/v2/my/ships/" + shipSymbol;
+json getShip(const string ship_symbol){
+    string endpoint = "https://api.spacetraders.io/v2/my/ships/" + ship_symbol;
     json result = http_get(endpoint);
     return result;
+}
+
+json getContract(const string contract_id){
+    return http_get("https://api.spacetraders.io/v2/my/contracts/" + contract_id);
 }
 
 json listContracts(){
@@ -258,6 +271,8 @@ string find_waypoint_by_type(const string systemSymbol, const string type){
 void initializeGlobals(){
     contracts_list = listContracts();
     target_contract = contracts_list["data"][0];
+    target_resource = target_contract["terms"]["deliver"][0]["tradeSymbol"];
+    cout << "Target resource is : " + target_resource << endl;
     json first_ship = getShip(callsign + "-1");
     asteroid_belt_symbol = find_waypoint_by_type(first_ship["data"]["nav"]["systemSymbol"], "ENGINEERED_ASTEROID"); 
 }
@@ -290,7 +305,26 @@ void navigateShip(const string ship_symbol, const string waypoint_symbol){
 }
 
 void createSurvey(const string ship_symbol){
-    http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/survey");
+    json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/survey");
+    
+    for (json individual_survey : result["data"]["surveys"]){
+        float hits = 0;
+        for (json deposit : individual_survey["deposits"]){
+            string resource = deposit["symbol"];
+            if (resource == target_resource){
+                hits++;
+            }
+        }
+
+        float deposit_size = individual_survey["deposits"].size();
+
+        survey a_survey;
+        float score = hits / deposit_size;
+        cout << "[INFO] Survey result: " + score << endl;
+        a_survey.score = score;
+        a_survey.surveyObject = individual_survey;
+        surveys.push_back(a_survey);
+    }
 }
 
 bool isShipCargoHoldFull(const json shipJson){
@@ -313,6 +347,7 @@ void commandShipLoop(const string ship_symbol){
     // is this ship already at the asteroid be << endl;lt?
         if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
             cout << "[INFO] " + ship_symbol + " is already on site at asteroid belt" << endl;
+            // do we already have a good enough survey?
             createSurvey(ship_symbol);
         } else {
             if (isShipDocked(ship_json))
