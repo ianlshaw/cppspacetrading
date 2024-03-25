@@ -5,14 +5,18 @@
 #include <iostream>
 #include <fstream>
 #include "spacetraders/nlohmann/json.hpp"
+#include <unistd.h>   
 
 using json = nlohmann::json;
 
 using namespace std;
 
 string callsign;
-string targetResource;
-string targetContractId;
+
+json contracts_list;
+json target_contract;
+
+string asteroid_belt_symbol;
 
 namespace
 {
@@ -32,16 +36,6 @@ void print_json(json jsonObject){
     int indent = 4;
     string pretty_json = jsonObject.dump(indent);
     cout << pretty_json;
-}
-
-void populate_target_resource(string tradeSymbol){
-  targetResource = tradeSymbol;
-  cout << "[INFO] targetResource updated to: " << targetResource << endl;
-}
-
-void populate_target_contract_id(string contractId){
-  targetContractId = contractId;
-  cout << "[INFO] targetContractId updated to: " << targetContractId << endl;
 }
 
 bool does_auth_file_exist(const string& authTokenFile) {
@@ -162,9 +156,7 @@ void write_auth_token_to_file(const string token){
      myfile.close();
 }
 
-void register_agent() {
-    cout << "Enter desired CALLSIGN:" << endl;
-    cin >> callsign;
+void registerAgent(const string callsign) {
 
     if (does_auth_file_exist(callsign + ".token")) {
         return;
@@ -187,7 +179,6 @@ json http_get(const string endpoint){
     CURL *curl;
     CURLcode res;
 
-    /* In windows, this inits the winsock stuff */
     curl_global_init(CURL_GLOBAL_ALL);
 
     /* get a curl handle */
@@ -226,21 +217,22 @@ json http_get(const string endpoint){
     return null_json;
 }
 
-void populate_contract_globals(){
-    json result = http_get("https://api.spacetraders.io/v2/my/contracts");
-    
-    string resource = result["data"][0]["terms"]["deliver"][0]["tradeSymbol"];
-    populate_target_resource(resource);
+json getShip(const string shipSymbol){
+    string endpoint = "https://api.spacetraders.io/v2/my/ships/" + shipSymbol;
+    json result = http_get(endpoint);
+    return result;
+}
 
-    string contractId = result["data"][0]["id"];
-    populate_target_contract_id(contractId);
+json listContracts(){
+   json result = http_get("https://api.spacetraders.io/v2/my/contracts");
+   return result;
 }
 
 void acceptContract(const string contractId) {
     cout << "[INFO] Attempting to accept contract " + contractId << endl;
     string endpoint = "https://api.spacetraders.io/v2/my/contracts/" + contractId + "/accept";
-    http_post(endpoint);
-    //print_json(result);
+    json result = http_post(endpoint);
+    print_json(result);
 }
 
 void useful_but_not_yet(){
@@ -256,14 +248,94 @@ void useful_but_not_yet(){
 //      exit(1);
 //    }
 }
- 
-int main(void)
+
+string find_waypoint_by_type(const string systemSymbol, const string type){
+    string endpoint = "https://api.spacetraders.io/v2/systems/" + systemSymbol + "/waypoints?type=" + type;
+    json result = http_get(endpoint);
+    return result["data"][0]["symbol"];
+}
+
+void initializeGlobals(){
+    contracts_list = listContracts();
+    target_contract = contracts_list["data"][0];
+    json first_ship = getShip(callsign + "-1");
+    asteroid_belt_symbol = find_waypoint_by_type(first_ship["data"]["nav"]["systemSymbol"], "ENGINEERED_ASTEROID"); 
+}
+
+bool isShipDocked(const json ship_json){
+    return (ship_json["data"]["nav"]["status"] == "DOCKED" ? true : false);
+}
+
+bool isShipInTransit(const json ship_json){
+    return (ship_json["data"]["nav"]["status"] == "IN_TRANSIT" ? true : false);
+}
+
+bool isShipInOrbit(const json ship_json){
+    return (ship_json["data"]["nav"]["status"] == "IN_ORBIT" ? true : false);
+}
+
+void orbitShip(const string ship_symbol){
+    http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/orbit");
+}
+
+void dockShip(const string ship_symbol){
+    http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/dock");
+}
+
+void navigateShip(const string ship_symbol, const string waypoint_symbol){
+    cout << "[INFO] navigateShip " + ship_symbol + " to " + waypoint_symbol << endl;
+    json payload;
+    payload["waypointSymbol"] = waypoint_symbol;
+    json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/navigate", payload);
+}
+
+void createSurvey(const string ship_symbol){
+    http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/survey");
+}
+
+bool isShipCargoHoldFull(const json shipJson){
+    return (shipJson["data"]["cargo"]["units"] == shipJson["data"]["cargo"]["capacity"] ? true : false);
+}
+
+bool isShipAtWaypoint(const json ship_json, string waypoint_symbol){
+    //cout << "[DEBUG] isShipAtWaypoint" << endl;
+    return (ship_json["data"]["nav"]["waypointSymbol"] == waypoint_symbol ? true : false);
+}
+
+void commandShipLoop(const string ship_symbol){
+    cout << "[DEBUG] commandShipLoop" << endl;
+    // get the state of the command frigate
+    json ship_json = getShip(ship_symbol);
+    if (isShipCargoHoldFull(ship_json)){
+    //   does it contain any garbage?
+    //   go to marketplace
+    } else {
+    // is this ship already at the asteroid be << endl;lt?
+        if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
+            cout << "[INFO] " + ship_symbol + " is already on site at asteroid belt" << endl;
+            createSurvey(ship_symbol);
+        } else {
+            if (isShipDocked(ship_json))
+                orbitShip(ship_symbol);
+            navigateShip(ship_symbol, asteroid_belt_symbol);
+        }
+    }
+}
+
+int main(int argc, char* argv[])
 {
-  register_agent();
-  populate_contract_globals();
-  acceptContract(targetContractId);
-  // there is currently no curl easy cleanup. i think there needs to be exactly 1. 
-  // so right now my inclination is to curl easy init once globally instead of in each http_ function.
-  curl_global_cleanup();
-  return 0;
+    callsign = argv[1];
+    registerAgent(callsign);
+    initializeGlobals();
+
+    while (true){
+        cout << "Start turn" << endl;
+        commandShipLoop(callsign + "-1");
+        sleep(120);
+    }
+
+    // there is currently no curl easy cleanup. i think there needs to be exactly 1. 
+    // so right now my inclination is to curl easy init once globally instead of in each http_ function.
+    curl_global_cleanup();
+    return 0;
 }
