@@ -16,8 +16,11 @@ string callsign;
 json contracts_list;
 json target_contract;
 string target_resource;
+string target_contract_id;
 string asteroid_belt_symbol;
-float survey_score_threshold = 0.5;
+string delivery_waypoint_symbol;
+float survey_score_threshold = 0.1;
+vector <string> resource_keep_list;
 
 namespace
 {
@@ -40,6 +43,7 @@ class survey {       // The class
 };
 
 vector <survey> surveys;
+json best_survey;
 
 void print_json(json jsonObject){
     int indent = 4;
@@ -94,7 +98,7 @@ json http_post(const string endpoint, const json payload = {}){
        } else {
            //cout << "[DEBUG] payload is not empty" << endl;
            string payload_as_string = payload.dump();
-           cout << payload_as_string.c_str() << endl;
+     //    cout << payload_as_string.c_str() << endl;
            //long payloadLength = strlen(payload_as_string.c_str());
            //cout << payloadLength << endl;
            const char* payload_as_c_string = payload_as_string.c_str();
@@ -144,8 +148,10 @@ json http_post(const string endpoint, const json payload = {}){
        // parse the response body into a json object.
        json output_as_json = json::parse(*httpData);
 
-       // for now just print the result to stdout
-       //print_json(output_as_json);
+       if (httpCode != 200 && httpCode != 201){
+           cout << "http post error" << endl;
+           print_json(output_as_json);
+       }
 
        // always reset curl handle after use   
        curl_easy_reset(curl);
@@ -205,7 +211,6 @@ json http_get(const string endpoint){
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, httpData.get());
    
-           
         /* Perform the request, res gets the return code */
         res = curl_easy_perform(curl);
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
@@ -217,6 +222,11 @@ json http_get(const string endpoint){
 
         // parse the response body into a json object.
         json output_as_json = json::parse(*httpData);
+
+        if (httpCode != 200 && httpCode != 201){
+            cout << "http_get error: " << endl;
+            print_json(output_as_json);
+        }
 
         //cout << "[DEBUG] curl easy reset" << endl; 
         curl_easy_reset(curl);
@@ -232,6 +242,10 @@ json getShip(const string ship_symbol){
     return result;
 }
 
+string shipSymbolFromJson(const json ship_json){
+    return ship_json["data"]["symbol"];
+}
+
 json getContract(const string contract_id){
     return http_get("https://api.spacetraders.io/v2/my/contracts/" + contract_id);
 }
@@ -245,7 +259,6 @@ void acceptContract(const string contractId) {
     cout << "[INFO] Attempting to accept contract " + contractId << endl;
     string endpoint = "https://api.spacetraders.io/v2/my/contracts/" + contractId + "/accept";
     json result = http_post(endpoint);
-    print_json(result);
 }
 
 void useful_but_not_yet(){
@@ -268,13 +281,31 @@ string find_waypoint_by_type(const string systemSymbol, const string type){
     return result["data"][0]["symbol"];
 }
 
+json getMarket(const string system_symbol, const string waypoint_symbol){
+    return http_get("https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints/" + waypoint_symbol + "/market");
+}
+
 void initializeGlobals(){
     contracts_list = listContracts();
+    // this next one is potentially an error. since the item target_contract holds right now is the first in the result
+    // of the list contracts method, NOT the result of a get contract against the contract ID.
+    // i should check what is the difference.
     target_contract = contracts_list["data"][0];
     target_resource = target_contract["terms"]["deliver"][0]["tradeSymbol"];
-    cout << "Target resource is : " + target_resource << endl;
+    target_contract_id = target_contract["id"];
+    cout << "[INFO] Target resource is: " + target_resource << endl;
     json first_ship = getShip(callsign + "-1");
-    asteroid_belt_symbol = find_waypoint_by_type(first_ship["data"]["nav"]["systemSymbol"], "ENGINEERED_ASTEROID"); 
+    string system_symbol = first_ship["data"]["nav"]["systemSymbol"];
+    asteroid_belt_symbol = find_waypoint_by_type(system_symbol, "ENGINEERED_ASTEROID"); 
+    delivery_waypoint_symbol = target_contract["terms"]["deliver"][0]["destinationSymbol"];
+
+
+    json get_market_result = getMarket(system_symbol, delivery_waypoint_symbol);
+    json imports = get_market_result["data"]["imports"];
+    for (json an_import : imports){
+        string import_symbol = an_import["symbol"];
+        resource_keep_list.push_back(import_symbol);
+    }
 }
 
 bool isShipDocked(const json ship_json){
@@ -290,10 +321,12 @@ bool isShipInOrbit(const json ship_json){
 }
 
 void orbitShip(const string ship_symbol){
+    cout << "[INFO] orbitShip " << ship_symbol << endl;
     http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/orbit");
 }
 
 void dockShip(const string ship_symbol){
+    cout << "[INFO] dockShip " + ship_symbol << endl;
     http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/dock");
 }
 
@@ -320,7 +353,7 @@ void createSurvey(const string ship_symbol){
 
         survey a_survey;
         float score = hits / deposit_size;
-        cout << "[INFO] Survey result: " + score << endl;
+        cout << "[INFO] Survey result: " << score << endl;
         a_survey.score = score;
         a_survey.surveyObject = individual_survey;
         surveys.push_back(a_survey);
@@ -336,24 +369,170 @@ bool isShipAtWaypoint(const json ship_json, string waypoint_symbol){
     return (ship_json["data"]["nav"]["waypointSymbol"] == waypoint_symbol ? true : false);
 }
 
-void commandShipLoop(const string ship_symbol){
-    cout << "[DEBUG] commandShipLoop" << endl;
-    // get the state of the command frigate
+void applyRoleSurveyor(const string ship_symbol){
     json ship_json = getShip(ship_symbol);
-    if (isShipCargoHoldFull(ship_json)){
-    //   does it contain any garbage?
-    //   go to marketplace
+    if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
+        cout << "[INFO] " + ship_symbol + " is already on site at asteroid belt" << endl;
+        createSurvey(ship_symbol);
     } else {
-    // is this ship already at the asteroid be << endl;lt?
-        if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
-            cout << "[INFO] " + ship_symbol + " is already on site at asteroid belt" << endl;
-            // do we already have a good enough survey?
-            createSurvey(ship_symbol);
-        } else {
-            if (isShipDocked(ship_json))
-                orbitShip(ship_symbol);
-            navigateShip(ship_symbol, asteroid_belt_symbol);
+        if (isShipDocked(ship_json))
+            orbitShip(ship_symbol);
+        navigateShip(ship_symbol, asteroid_belt_symbol);
+    }
+}
+
+bool isItemWorthKeeping(const string item){
+    for(string resource: resource_keep_list){
+        if (item == resource){
+            return true;
         }
+    }
+    return false;
+}
+
+json jettisonCargo(const string ship_symbol, const string cargo_symbol, const int units){
+
+    cout << "[INFO] Jettisoning " 
+         << units 
+         << " units of " 
+         << cargo_symbol 
+         << endl;
+
+    json payload;
+    payload["symbol"] = cargo_symbol;
+    payload["units"] = units;
+    return http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/jettison", payload);
+}
+
+json extractResourcesWithSurvey(const string ship_symbol, const json target_survey){
+    return http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/extract/survey", target_survey);
+}
+
+json refuelShip(const string ship_symbol){
+    cout << "[INFO] refuelShip " + ship_symbol << endl;
+    return http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/refuel");
+}
+
+int howMuchOfCargoDoesShipHaveInCargoHold(const json ship_json, const string cargo_symbol){
+    //cout << "[DEBUG] howMuchOfCargoDoesShipHaveInCargoHold " + cargo_symbol << endl;
+    json inventory = ship_json["data"]["cargo"]["inventory"];
+    
+    for (json item: inventory){
+        if (item["symbol"] == cargo_symbol){
+            cout << "[DEBUG] " << item["units"] << " of " << cargo_symbol << endl;
+            return item["units"];
+        }
+    }
+    return 0;
+}
+
+json fulfillContract(const string contract_id){
+    json result = http_post("https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/fulfill");
+    print_json(result);
+    return result;
+}
+
+json deliverCargoToContract(const string contract_id, const string ship_symbol, const string trade_symbol, const int units){
+    cout << "[DEBUG] deliverCargoToContract " << endl; 
+    json payload;
+    payload["shipSymbol"] = ship_symbol;
+    payload["tradeSymbol"] = trade_symbol;
+    payload["units"] = units;
+    json result = http_post("https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/deliver", payload);
+    int units_fulfilled = result["data"]["contract"]["terms"]["deliver"][0]["unitsFulfilled"];
+    int units_required = result["data"]["contract"]["terms"]["deliver"][0]["unitsRequired"];
+    cout << "[INFO] Delivered " 
+         << units 
+         << " of " 
+         << trade_symbol 
+         << " [" 
+         << units_fulfilled 
+         << "/" 
+         << units_required 
+         << "]" 
+         << endl;
+    return result;
+}
+
+void applyRoleMiner(const string ship_symbol){
+    cout << "[INFO] " << ship_symbol << " applyRoleMiner" << endl;
+
+    // get ship state
+    json ship_json = getShip(ship_symbol);
+
+    if(isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
+        // ship is at asteroid belt.
+        if(isShipCargoHoldFull(ship_json)){
+            cout << "[INFO] " + ship_symbol + " cargo hold full. Heading to delivery waypoint." << endl;
+            navigateShip(ship_symbol, delivery_waypoint_symbol);
+        } else {
+            // ship is at asteroid belt, but its cargo hold is not full.
+            json result = extractResourcesWithSurvey(ship_symbol, best_survey);
+            string extracted_resource_symbol = result["data"]["extraction"]["yield"]["symbol"];
+            int extracted_resource_units = result["data"]["extraction"]["yield"]["units"];
+            json cargo = result["data"]["cargo"];
+            int capacity = cargo["capacity"];
+            int units = cargo["units"];
+            cout << "[INFO] Extracted " 
+                 << extracted_resource_units 
+                 << " units of " + extracted_resource_symbol + " [" << units << "/" << capacity << "]" << endl;
+        
+            // jettison anything which is not on the resource_keep_list
+            if (!isItemWorthKeeping(extracted_resource_symbol)){
+                jettisonCargo(ship_symbol, extracted_resource_symbol, extracted_resource_units);
+            }
+        
+                }
+            } else {
+                // ship is not at asteroid belt
+                if(isShipCargoHoldFull(ship_json)) {
+                    if (!isShipDocked(ship_json)){
+                        dockShip(ship_symbol);
+                    }
+                    refuelShip(ship_symbol);
+                    // deliver
+                    int units = howMuchOfCargoDoesShipHaveInCargoHold(ship_json, target_resource);
+                    deliverCargoToContract(target_contract_id, ship_symbol, target_resource, units);
+                    // sell
+                } else {
+                    if (isShipDocked(ship_json)){
+                        orbitShip(ship_symbol);
+                    }
+                    navigateShip(ship_symbol, asteroid_belt_symbol);
+                }
+            }
+}
+
+float bestSurveyScore(){
+    float best_survey_score = 0.0;
+    for(survey item: surveys){
+        if (item.score > best_survey_score){
+            best_survey_score = item.score;
+            // probably should set this elsewhere. or just rename the function
+            best_survey = item.surveyObject;
+        }
+    }
+    cout << "[INFO] Best survey score: " << best_survey_score << endl;
+    return best_survey_score;
+}
+
+bool isSurveyGoodEnough(){
+    return (bestSurveyScore() > survey_score_threshold ? true : false);
+}
+
+void commandShipRoleDecider(const string ship_symbol){
+
+
+    // do we have a good survey?
+    if (isSurveyGoodEnough()){
+        cout << "[INFO] Survey is good enough" << endl;
+        // then lets mine.
+        applyRoleMiner(ship_symbol);
+
+    } else {
+    // survey is not good enough. command frigate should survey.
+        cout << "[INFO] Survey is not good enough" << endl;
+        applyRoleSurveyor(ship_symbol);
     }
 }
 
@@ -362,10 +541,16 @@ int main(int argc, char* argv[])
     callsign = argv[1];
     registerAgent(callsign);
     initializeGlobals();
+    // only do this if its needed.
+    acceptContract(target_contract["id"]);
+    fulfillContract(target_contract["id"]);
 
+
+    int turn_number = 0;
     while (true){
-        cout << "Start turn" << endl;
-        commandShipLoop(callsign + "-1");
+        turn_number++;
+        cout << "[INFO] Turn " << turn_number << endl;
+        commandShipRoleDecider(callsign + "-1");
         sleep(120);
     }
 
