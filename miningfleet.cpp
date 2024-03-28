@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <curl/curl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <iostream>
@@ -7,6 +6,7 @@
 #include <sstream> 
 #include <ctime>
 #include <unistd.h>   
+#include <curl/curl.h>
 #include "json.hpp"
 
 using json = nlohmann::json;
@@ -21,9 +21,10 @@ string target_resource;
 string target_contract_id;
 string asteroid_belt_symbol;
 string delivery_waypoint_symbol;
-float survey_score_threshold = 0.1;
-vector <string> resource_keep_list;
+float survey_score_threshold = 0.5;    // command frigate uses this to decide its role
+vector <string> resource_keep_list;    // storage for cargoSymbols. everything else gets jettisoned
 
+// this is needed by libcurl to retrieve data from the HTTP responses the server will send us
 namespace
 {
     std::size_t callback(
@@ -38,22 +39,25 @@ namespace
     }
 }
 
-class survey {       // The class
-  public:             // Access specifier
-    float score;        // Attribute (int variable)
-    json surveyObject;  // Attribute (string variable)
+// we want to be able to 
+class survey {       
+  public:           
+    float score;        // Used to prioritize which survey is used to mine 
+    json surveyObject;  // Json object for an individual survey
 };
 
-vector <survey> surveys;
-json best_survey;
+vector <survey> surveys; // Storage for the surveys we will create
+json best_survey;        // Json object for the survey with the highest score
 
-void print_json(json jsonObject){
+// when printing an entire json object is required, this makes it easier on the eyes
+void printJson(json jsonObject){
     int indent = 4;
     string pretty_json = jsonObject.dump(indent);
     cout << pretty_json;
 }
 
-bool does_auth_file_exist(const string& authTokenFile) {
+// auth token file will only exist after first run
+bool doesAuthFileExist(const string& authTokenFile) {
     //cout << "[INFO] Checking for existence of " << authTokenFile << endl;
     if (std::__fs::filesystem::exists(authTokenFile)){
         //cout << "[INFO] Auth file found\n";
@@ -64,7 +68,18 @@ bool does_auth_file_exist(const string& authTokenFile) {
     }
 }
 
-string read_auth_token_from_file(const string authTokenFile){
+// Register Agent returns an auth token we want to keep safe 
+void writeAuthTokenToFile(const string token){
+     ofstream myfile;
+     string filename = callsign + ".token";
+     cout << "[INFO] Wrote auth file to: " << filename << endl;
+     myfile.open (filename);
+     myfile << token;
+     myfile.close();
+}
+
+// a corresponding *.token in .gitignore is a simple way to avoid leaking a callsigns authentication token
+string readAuthTokenFromFile(const string authTokenFile){
     string myText;
     string wholeDocument;
     ifstream MyReadFile(authTokenFile);
@@ -75,6 +90,57 @@ string read_auth_token_from_file(const string authTokenFile){
     return wholeDocument;
 }
 
+
+
+// wrapper to make libcurl usable enough for what we need
+json http_get(const string endpoint){
+    //cout << "[INFO] Sending GET request to " << endpoint << endl;
+    CURL *curl;
+    CURLcode res;
+
+    curl_global_init(CURL_GLOBAL_ALL);
+
+    /* get a curl handle */
+    curl = curl_easy_init();
+    if(curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
+        struct curl_slist *headers = NULL;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        string auth_token_header = "Authorization: Bearer " + readAuthTokenFromFile(callsign + ".token");
+        headers = curl_slist_append(headers, auth_token_header.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        long httpCode(0);
+        std::unique_ptr<std::string> httpData(new std::string());
+
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, httpData.get());
+   
+        /* Perform the request, res gets the return code */
+        res = curl_easy_perform(curl);
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+
+        /* Check for errors */
+        if(res != CURLE_OK)
+          fprintf(stderr, "curl_easy_perform() failed: %s\n",
+                curl_easy_strerror(res));
+
+        // parse the response body into a json object.
+        json output_as_json = json::parse(*httpData);
+
+        if (httpCode != 200 && httpCode != 201){
+            cout << "http_get error: " << endl;
+            printJson(output_as_json);
+        }
+
+        //cout << "[DEBUG] curl easy reset" << endl; 
+        curl_easy_reset(curl);
+        return output_as_json;
+    }
+    json null_json = {};
+    return null_json;
+}
+
+// libcurl wrapper. payload parameter is optional
 json http_post(const string endpoint, const json payload = {}){
     //cout << "[INFO] Sending POST request to " << endpoint << endl;
 
@@ -100,13 +166,12 @@ json http_post(const string endpoint, const json payload = {}){
        } else {
            //cout << "[DEBUG] payload is not empty" << endl;
            string payload_as_string = payload.dump();
-     //    cout << payload_as_string.c_str() << endl;
+           //cout << payload_as_string.c_str() << endl;
            //long payloadLength = strlen(payload_as_string.c_str());
            //cout << payloadLength << endl;
            const char* payload_as_c_string = payload_as_string.c_str();
            //curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload_as_c_string);
            curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, payload_as_c_string);
-
 
            //curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, payloadLength);
        }
@@ -118,8 +183,8 @@ json http_post(const string endpoint, const json payload = {}){
        headers = curl_slist_append(headers, "Content-Type: application/json");
 
        // only set bearer if auth file exists. this is to support initial register agent
-       if (does_auth_file_exist(callsign + ".token")){
-           string auth_token_header = "Authorization: Bearer " + read_auth_token_from_file(callsign + ".token");
+       if (doesAuthFileExist(callsign + ".token")){
+           string auth_token_header = "Authorization: Bearer " + readAuthTokenFromFile(callsign + ".token");
            headers = curl_slist_append(headers, auth_token_header.c_str());
        }
 
@@ -144,38 +209,33 @@ json http_post(const string endpoint, const json payload = {}){
          fprintf(stderr, "curl_easy_perform() failed: %s\n",
                  curl_easy_strerror(res));
 
-
+       // retrieve the http response code
        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
        
        // parse the response body into a json object.
        json output_as_json = json::parse(*httpData);
 
+       // print entire response body when http return code is non-20X
        if (httpCode != 200 && httpCode != 201){
            cout << "http post error" << endl;
-           print_json(output_as_json);
+           printJson(output_as_json);
        }
 
        // always reset curl handle after use   
        curl_easy_reset(curl);
 
+       // return the whole object and let other methods deal with it
        return output_as_json; 
      }
     json null_json = {};
     return null_json;
 }
 
-void write_auth_token_to_file(const string token){
-     ofstream myfile;
-     string filename = callsign + ".token";
-     cout << "[INFO] Wrote auth file to: " << filename << endl;
-     myfile.open (filename);
-     myfile << token;
-     myfile.close();
-}
 
 void registerAgent(const string callsign) {
 
-    if (does_auth_file_exist(callsign + ".token")) {
+    // we don't want to ever accidently overwrite a .token file
+    if (doesAuthFileExist(callsign + ".token")) {
         return;
     }
 
@@ -188,54 +248,7 @@ void registerAgent(const string callsign) {
     register_agent_json_object["symbol"] = callsign;
     register_agent_json_object["faction"] = faction;
     json result = http_post("https://api.spacetraders.io/v2/register", register_agent_json_object);
-    write_auth_token_to_file(result["data"]["token"]);
-}
-
-json http_get(const string endpoint){
-    //cout << "[INFO] Sending GET request to " << endpoint << endl;
-    CURL *curl;
-    CURLcode res;
-
-    curl_global_init(CURL_GLOBAL_ALL);
-
-    /* get a curl handle */
-    curl = curl_easy_init();
-    if(curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
-        struct curl_slist *headers = NULL;
-        headers = curl_slist_append(headers, "Content-Type: application/json");
-        string auth_token_header = "Authorization: Bearer " + read_auth_token_from_file(callsign + ".token");
-        headers = curl_slist_append(headers, auth_token_header.c_str());
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        long httpCode(0);
-        std::unique_ptr<std::string> httpData(new std::string());
-
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, httpData.get());
-   
-        /* Perform the request, res gets the return code */
-        res = curl_easy_perform(curl);
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-
-        /* Check for errors */
-        if(res != CURLE_OK)
-          fprintf(stderr, "curl_easy_perform() failed: %s\n",
-                curl_easy_strerror(res));
-
-        // parse the response body into a json object.
-        json output_as_json = json::parse(*httpData);
-
-        if (httpCode != 200 && httpCode != 201){
-            cout << "http_get error: " << endl;
-            print_json(output_as_json);
-        }
-
-        //cout << "[DEBUG] curl easy reset" << endl; 
-        curl_easy_reset(curl);
-        return output_as_json;
-    }
-    json null_json = {};
-    return null_json;
+    writeAuthTokenToFile(result["data"]["token"]);
 }
 
 json getShip(const string ship_symbol){
@@ -263,20 +276,6 @@ void acceptContract(const string contractId) {
     json result = http_post(endpoint);
 }
 
-void useful_but_not_yet(){
-//    if (httpCode != 201) {
-//      cout << "!!! ERROR !!!" << endl;
-//      cout << "HTTP RETURN CODE:" << endl;
-//      cout << httpCode << endl;
-//      cout << "HTTP BODY:" << endl;
-//      json output_as_json = json::parse(*httpData);
-//      int indent = 4;
-//      string pretty_json = output_as_json.dump(indent);
-//      cout << pretty_json;
-//      exit(1);
-//    }
-}
-
 string find_waypoint_by_type(const string systemSymbol, const string type){
     string endpoint = "https://api.spacetraders.io/v2/systems/" + systemSymbol + "/waypoints?type=" + type;
     json result = http_get(endpoint);
@@ -295,8 +294,9 @@ void initializeGlobals(){
     target_contract = contracts_list["data"][0];
     target_resource = target_contract["terms"]["deliver"][0]["tradeSymbol"];
     target_contract_id = target_contract["id"];
-    cout << "[INFO] Target resource is: " + target_resource << endl;
-    cout << "[INFO] Contract fulfilled? " << target_contract["fulfilled"] << endl;
+    cout << "[INFO] target_resource = " + target_resource << endl;
+    cout << "[INFO] survey_score_threshold: " << survey_score_threshold << endl;
+    cout << "[INFO] contract_fulfilled = " << target_contract["fulfilled"] << endl;
     json first_ship = getShip(callsign + "-1");
     string system_symbol = first_ship["data"]["nav"]["systemSymbol"];
     asteroid_belt_symbol = find_waypoint_by_type(system_symbol, "ENGINEERED_ASTEROID"); 
@@ -324,14 +324,15 @@ bool isShipInOrbit(const json ship_json){
 }
 
 void orbitShip(const string ship_symbol){
-    cout << "[INFO] orbitShip " << ship_symbol << endl;
-    http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/orbit");
+    //cout << "[DEBUG] orbitShip " << ship_symbol << endl;
+    const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/orbit");
+    cout << "[INFO] " << ship_symbol << " " << result["data"]["nav"]["status"] << endl;
 }
 
 void dockShip(const string ship_symbol){
     //cout << "[DEBUG] dockShip " + ship_symbol << endl;
     const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/dock");
-    cout << "[INFO] " << ship_symbol << result["data"]["nav"]["status"] << endl;
+    cout << "[INFO] " << ship_symbol << " " << result["data"]["nav"]["status"] << endl;
 }
 
 void navigateShip(const string ship_symbol, const string waypoint_symbol){
@@ -393,35 +394,34 @@ bool isSurveyExpired(const json survey){
     //cout << "[DEBUG] isSurveyExpired" << endl;
 
     const string expiration = survey["expiration"];
-    cout << "[DEBUG] expiration string: " << expiration << endl;
+    //cout << "[DEBUG] expiration string: " << expiration << endl;
 
     tm expiration_time_handle{};
     istringstream expiration_string_stream(expiration);
     
+    // scan the json string using a hardcoded format
     expiration_string_stream >> get_time(&expiration_time_handle, "%Y-%m-%dT%H:%M:%S");
 
     if (expiration_string_stream.fail()) {
         throw runtime_error{"failed to parse time string"};
     }   
 
-    time_t expiration_time_stamp = mktime(&expiration_time_handle);
-    cout << "[DEBUG] expiration_time_stamp: " << expiration_time_stamp << endl;
-
-    time_t current_time_stamp = time(NULL);
+    time_t expiration_timestamp = mktime(&expiration_time_handle);
+    //cout << "[DEBUG] expiration_timestamp: " << expiration_timestamp << endl;
 
     // time now
-    tm* utc_time_now = gmtime(&current_time_stamp);
-  
+    time_t current_timestamp = time(NULL);
+
+    // convert time now to utc
+    tm* utc_time_now = gmtime(&current_timestamp);
+
+    // convert it back into a time_t for subsequent comparison
     time_t utc_time_now_timestamp = mktime(utc_time_now);
+    //cout << "[DEBUG] utc_time_now_timestamp = " << utc_time_now_timestamp << endl;
 
-    cout << "[DEBUG] utc_time_now_timestamp = " << utc_time_now_timestamp << endl;
-
-    cout << "[DEBUG] utc_time_now: " << asctime(utc_time_now);
-
-    //double time_difference = difftime(current_time_stamp, expiration_time_stamp);
-    double seconds_until_expiry = difftime(expiration_time_stamp, utc_time_now_timestamp);
-
-    cout << "[DEBUG] difference between expiration and now: " << seconds_until_expiry << endl;
+    // find the difference between the utc time now and surveys expiration
+    double seconds_until_expiry = difftime(expiration_timestamp, utc_time_now_timestamp);
+    cout << "[DEBUG] Seconds until expiry: " << seconds_until_expiry << endl;
 
     return (seconds_until_expiry <= 5 ? true : false);
 }
@@ -429,14 +429,21 @@ bool isSurveyExpired(const json survey){
 void removeExpiredSurveys(){
     cout << "[DEBUG] removeExpiredSurveys" << endl;
     int vector_index = 0;
-    for (survey each_survey: surveys){
-        const json each_survey_object = each_survey.surveyObject;
+    while(vector_index < surveys.size()){
+        survey each_survey = surveys.at(vector_index);
+        json each_survey_object = each_survey.surveyObject;
         if (isSurveyExpired(each_survey_object)){
-            cout << "[DEBUG] SURVEY IS EXPIRED" << endl;
+            //const string signature = each_survey_object["signature"];
+            const float survey_score = each_survey.score;
+            cout << "[INFO] Erasing expired survey " << "with score: " << survey_score << endl;
+            //cout << "[INFO] Erasing expired survey " << signature << " with score: " << survey_score << endl;
             surveys.erase(surveys.begin() + vector_index);
+            cout << "[DEBUG] after surveys.erase" << endl;
+        } else {
+            vector_index++;
         }
-        vector_index++;
     }
+        cout << "[DEBUG] removeExpiredSurveys AFTER WHILE LOOP" << endl;
 }
 
 void applyRoleSurveyor(const string ship_symbol){
@@ -514,9 +521,8 @@ void refuelShip(const string ship_symbol){
     cout << "[INFO] " << ship_symbol  << " refuelled costing " << transaction["totalPrice"] << endl;
 }
 
-int howMuchOfCargoDoesShipHaveInCargoHold(const json ship_json, const string cargo_symbol){
+int howMuchOfCargoDoesShipHaveInCargoHold(const json inventory, const string cargo_symbol){
     //cout << "[DEBUG] howMuchOfCargoDoesShipHaveInCargoHold " + cargo_symbol << endl;
-    json inventory = ship_json["data"]["cargo"]["inventory"];
     
     for (json item: inventory){
         if (item["symbol"] == cargo_symbol){
@@ -529,7 +535,7 @@ int howMuchOfCargoDoesShipHaveInCargoHold(const json ship_json, const string car
 
 json fulfillContract(const string contract_id){
     json result = http_post("https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/fulfill");
-    print_json(result);
+    printJson(result);
     return result;
 }
 
@@ -543,7 +549,7 @@ json deliverCargoToContract(const string contract_id, const string ship_symbol, 
     int units_fulfilled = result["data"]["contract"]["terms"]["deliver"][0]["unitsFulfilled"];
     int units_required = result["data"]["contract"]["terms"]["deliver"][0]["unitsRequired"];
 
-    cout << "[INFO] " << ship_symbol << "Delivered " << units << " of " << trade_symbol 
+    cout << "[INFO] " << ship_symbol << " Delivered " << units << " of " << trade_symbol 
          << " [" << units_fulfilled << "/" << units_required << "]" << endl;
 
     return result;
@@ -594,12 +600,15 @@ void applyRoleMiner(const string ship_symbol){
             if (!isContractFulfilled(target_contract)){
                 // until the contract is complete, we prioritize delivering its goods.
                 // and only sell whats left
-                int units = howMuchOfCargoDoesShipHaveInCargoHold(ship_json, target_resource);
-                json deliver_result = deliverCargoToContract(target_contract_id, ship_symbol, target_resource, units);
-                const json inventory = deliver_result["data"]["cargo"]["inventory"];
-                for (json item: inventory){
+                const json inventory = ship_json["data"]["cargo"]["inventory"];
+                int units = howMuchOfCargoDoesShipHaveInCargoHold(inventory, target_resource);
+                const json deliver_result = deliverCargoToContract(target_contract_id, ship_symbol, target_resource, units);
+                const json post_deliver_inventory = deliver_result["data"]["cargo"]["inventory"];
+                for (json item: post_deliver_inventory){
                     string cargo_symbol = item["symbol"];
-                    int units = howMuchOfCargoDoesShipHaveInCargoHold(ship_json, cargo_symbol);
+                    // incorrect, ship_json is outdated and needs to be inventory.
+                    // requires that howMuch method is updated to accept inventory rather than ship_json
+                    int units = howMuchOfCargoDoesShipHaveInCargoHold(inventory, cargo_symbol);
                     sellCargo(ship_symbol, cargo_symbol, units);
                 }
             } else {
@@ -675,12 +684,11 @@ int main(int argc, char* argv[])
     callsign = argv[1];
     registerAgent(callsign);
     initializeGlobals();
-    // only do this if its needed.
-    
+   
+    // attempting to accept an already accepted contract with throw http non-20X 
     if (!hasContractBeenAccepted(target_contract)){
         acceptContract(target_contract_id);
     }
-
 
     int turn_number = 0;
 
@@ -692,10 +700,13 @@ int main(int argc, char* argv[])
         // remove expired surveys
         if (!isSurveyListEmpty()){
             removeExpiredSurveys();
+            cout << "[DEBUG] AFTER removeExpiredSurveys()" << endl;
         }
 
-
+        // command ship can fulfill several roles, and so we have to decide
         commandShipRoleDecider(callsign + "-1");
+
+        // this is arbitary but avoids most cooldown issues, and is easier on the server.
         sleep(120);
         cout << endl;
     }
