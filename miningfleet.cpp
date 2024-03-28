@@ -7,7 +7,7 @@
 #include <sstream> 
 #include <ctime>
 #include <unistd.h>   
-#include "spacetraders/nlohmann/json.hpp"
+#include "json.hpp"
 
 using json = nlohmann::json;
 
@@ -408,24 +408,34 @@ bool isSurveyExpired(const json survey){
     cout << "[DEBUG] expiration_time_stamp: " << expiration_time_stamp << endl;
 
     time_t current_time_stamp = time(NULL);
-    cout << "[DEBUG] current_time_stamp: " << current_time_stamp << endl;
 
     // time now
     tm* utc_time_now = gmtime(&current_time_stamp);
-    cout << "[DEBUG] utc_time_now: " << asctime(utc_time_now) << endl;
+  
+    time_t utc_time_now_timestamp = mktime(utc_time_now);
 
-    double time_difference = difftime(current_time_stamp, expiration_time_stamp);
+    cout << "[DEBUG] utc_time_now_timestamp = " << utc_time_now_timestamp << endl;
 
-    cout << "[DEBUG] difference between expiration and now: " << time_difference << endl;
+    cout << "[DEBUG] utc_time_now: " << asctime(utc_time_now);
 
-    return true;
+    //double time_difference = difftime(current_time_stamp, expiration_time_stamp);
+    double seconds_until_expiry = difftime(expiration_time_stamp, utc_time_now_timestamp);
+
+    cout << "[DEBUG] difference between expiration and now: " << seconds_until_expiry << endl;
+
+    return (seconds_until_expiry <= 5 ? true : false);
 }
 
 void removeExpiredSurveys(){
     cout << "[DEBUG] removeExpiredSurveys" << endl;
+    int vector_index = 0;
     for (survey each_survey: surveys){
         const json each_survey_object = each_survey.surveyObject;
-        isSurveyExpired(each_survey_object);
+        if (isSurveyExpired(each_survey_object)){
+            cout << "[DEBUG] SURVEY IS EXPIRED" << endl;
+            surveys.erase(surveys.begin() + vector_index);
+        }
+        vector_index++;
     }
 }
 
