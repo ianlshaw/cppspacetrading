@@ -628,7 +628,7 @@ void applyRoleMiner(const string ship_symbol){
                 const json inventory = ship_json["data"]["cargo"]["inventory"];
                 for (json item: inventory){
                     string cargo_symbol = item["symbol"];
-                    int units = howMuchOfCargoDoesShipHaveInCargoHold(ship_json, cargo_symbol);
+                    int units = howMuchOfCargoDoesShipHaveInCargoHold(inventory, cargo_symbol);
                     sellCargo(ship_symbol, cargo_symbol, units);
                 }
             }
