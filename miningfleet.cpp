@@ -21,7 +21,7 @@ string target_resource;
 string target_contract_id;
 string asteroid_belt_symbol;
 string delivery_waypoint_symbol;
-float survey_score_threshold = 0.5;    // command frigate uses this to decide its role
+float survey_score_threshold = 0.3;    // command frigate uses this to decide its role
 vector <string> resource_keep_list;    // storage for cargoSymbols. everything else gets jettisoned
 
 // this is needed by libcurl to retrieve data from the HTTP responses the server will send us
@@ -58,14 +58,8 @@ void printJson(json jsonObject){
 
 // auth token file will only exist after first run
 bool doesAuthFileExist(const string& authTokenFile) {
-    //cout << "[INFO] Checking for existence of " << authTokenFile << endl;
-    if (std::__fs::filesystem::exists(authTokenFile)){
-        //cout << "[INFO] Auth file found\n";
-        return true;
-    } else {
-        //cout << "[INFO] Auth file not found\n";
-        return false;
-    }
+    ifstream auth_token_file_stream(authTokenFile.c_str());
+    return auth_token_file_stream.good();
 }
 
 // Register Agent returns an auth token we want to keep safe 
@@ -421,13 +415,13 @@ bool isSurveyExpired(const json survey){
 
     // find the difference between the utc time now and surveys expiration
     double seconds_until_expiry = difftime(expiration_timestamp, utc_time_now_timestamp);
-    cout << "[DEBUG] Seconds until expiry: " << seconds_until_expiry << endl;
+    //cout << "[DEBUG] Seconds until expiry: " << seconds_until_expiry << endl;
 
     return (seconds_until_expiry <= 5 ? true : false);
 }
 
 void removeExpiredSurveys(){
-    cout << "[DEBUG] removeExpiredSurveys" << endl;
+    //cout << "[DEBUG] removeExpiredSurveys" << endl;
     int vector_index = 0;
     while(vector_index < surveys.size()){
         survey each_survey = surveys.at(vector_index);
@@ -438,12 +432,12 @@ void removeExpiredSurveys(){
             cout << "[INFO] Erasing expired survey " << "with score: " << survey_score << endl;
             //cout << "[INFO] Erasing expired survey " << signature << " with score: " << survey_score << endl;
             surveys.erase(surveys.begin() + vector_index);
-            cout << "[DEBUG] after surveys.erase" << endl;
+            //cout << "[DEBUG] after surveys.erase" << endl;
         } else {
             vector_index++;
         }
     }
-        cout << "[DEBUG] removeExpiredSurveys AFTER WHILE LOOP" << endl;
+    //cout << "[DEBUG] removeExpiredSurveys AFTER WHILE LOOP" << endl;
 }
 
 void applyRoleSurveyor(const string ship_symbol){
@@ -534,13 +528,14 @@ int howMuchOfCargoDoesShipHaveInCargoHold(const json inventory, const string car
 }
 
 json fulfillContract(const string contract_id){
+    cout << "[DEBUG] fulfillContract" << endl;
     json result = http_post("https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/fulfill");
     printJson(result);
     return result;
 }
 
 json deliverCargoToContract(const string contract_id, const string ship_symbol, const string trade_symbol, const int units){
-    cout << "[DEBUG] deliverCargoToContract " << endl; 
+    //cout << "[DEBUG] deliverCargoToContract " << endl; 
     json payload;
     payload["shipSymbol"] = ship_symbol;
     payload["tradeSymbol"] = trade_symbol;
@@ -556,7 +551,16 @@ json deliverCargoToContract(const string contract_id, const string ship_symbol, 
 }
 
 bool isContractFulfilled(const json contract_json){
+    cout << "[DEBUG] isContractFulfilled" << endl;
     return contract_json["fulfilled"];
+}
+
+bool areContractRequirementsMet(const json contract_json){
+    cout << "[DEBUG] areContractRequirementsMet" << endl;
+    //printJson(contract_json);
+    const int units_fulfilled = contract_json["terms"]["deliver"][0]["unitsFulfilled"];
+    const int units_required = contract_json["terms"]["deliver"][0]["unitsRequired"];
+    return (units_fulfilled == units_required ? true : false);
 }
 
 void sellCargo(const string ship_symbol, const string cargo_symbol, const int units){
@@ -603,12 +607,20 @@ void applyRoleMiner(const string ship_symbol){
                 const json inventory = ship_json["data"]["cargo"]["inventory"];
                 int units = howMuchOfCargoDoesShipHaveInCargoHold(inventory, target_resource);
                 const json deliver_result = deliverCargoToContract(target_contract_id, ship_symbol, target_resource, units);
+
+                // check if the contract can be handed in
+                const json contract_after_delivery = deliver_result["data"]["contract"];
+                if (areContractRequirementsMet(contract_after_delivery)){
+                    fulfillContract(target_contract_id);
+                }
+
+                // sell what remains in the cargo hold after delvering to the contract
                 const json post_deliver_inventory = deliver_result["data"]["cargo"]["inventory"];
                 for (json item: post_deliver_inventory){
                     string cargo_symbol = item["symbol"];
                     // incorrect, ship_json is outdated and needs to be inventory.
                     // requires that howMuch method is updated to accept inventory rather than ship_json
-                    int units = howMuchOfCargoDoesShipHaveInCargoHold(inventory, cargo_symbol);
+                    int units = howMuchOfCargoDoesShipHaveInCargoHold(post_deliver_inventory, cargo_symbol);
                     sellCargo(ship_symbol, cargo_symbol, units);
                 }
             } else {
@@ -700,7 +712,7 @@ int main(int argc, char* argv[])
         // remove expired surveys
         if (!isSurveyListEmpty()){
             removeExpiredSurveys();
-            cout << "[DEBUG] AFTER removeExpiredSurveys()" << endl;
+            //cout << "[DEBUG] AFTER removeExpiredSurveys()" << endl;
         }
 
         // command ship can fulfill several roles, and so we have to decide
