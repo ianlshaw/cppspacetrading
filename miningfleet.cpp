@@ -440,6 +440,7 @@ void removeExpiredSurveys(){
     //cout << "[DEBUG] removeExpiredSurveys AFTER WHILE LOOP" << endl;
 }
 
+// ships with this role should go to the asteroid belt and survey for the contract's target resource over and over.
 void applyRoleSurveyor(const string ship_symbol){
 
     json ship_json = getShip(ship_symbol);
@@ -453,6 +454,7 @@ void applyRoleSurveyor(const string ship_symbol){
     }
 }
 
+// useless goods can be obtained through mining, this method is used to decide what gets "spaced"
 bool isItemWorthKeeping(const string item){
     for(string resource: resource_keep_list){
         if (item == resource){
@@ -462,6 +464,7 @@ bool isItemWorthKeeping(const string item){
     return false;
 }
 
+// this is how we throw away useless goods obtained by mining
 void jettisonCargo(const string ship_symbol, const string cargo_symbol, const int units){
 
     cout << "[INFO] Jettisoning " 
@@ -530,6 +533,8 @@ int howMuchOfCargoDoesShipHaveInCargoHold(const json inventory, const string car
 json fulfillContract(const string contract_id){
     cout << "[DEBUG] fulfillContract" << endl;
     json result = http_post("https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/fulfill");
+    // update the global target_contract after it is fulfilled.
+    target_contract = result["data"]["contract"];
     printJson(result);
     return result;
 }
@@ -550,13 +555,15 @@ json deliverCargoToContract(const string contract_id, const string ship_symbol, 
     return result;
 }
 
+// until this is true, we do not want to sell the target_resource
 bool isContractFulfilled(const json contract_json){
-    cout << "[DEBUG] isContractFulfilled" << endl;
+    //cout << "[DEBUG] isContractFulfilled" << endl;
     return contract_json["fulfilled"];
 }
 
+// only once this is true should we attempt to fulfill the contract
 bool areContractRequirementsMet(const json contract_json){
-    cout << "[DEBUG] areContractRequirementsMet" << endl;
+    //cout << "[DEBUG] areContractRequirementsMet" << endl;
     //printJson(contract_json);
     const int units_fulfilled = contract_json["terms"]["deliver"][0]["unitsFulfilled"];
     const int units_required = contract_json["terms"]["deliver"][0]["unitsRequired"];
@@ -577,6 +584,9 @@ void sellCargo(const string ship_symbol, const string cargo_symbol, const int un
          << " " << trade_symbol << " for " << total_price << endl;
 }
 
+// mining ships should go to the asteroid belt and mine until full
+// then they should head to the marketplace, deliver contract goods sell everything else
+// once the contract is complete, they should sell everything.
 void applyRoleMiner(const string ship_symbol){
     cout << "[INFO] " << ship_symbol << " applyRoleMiner" << endl;
 
@@ -589,10 +599,13 @@ void applyRoleMiner(const string ship_symbol){
     }
 
     if (isShipAtWaypoint(ship_json, delivery_waypoint_symbol)){
+        // ship is at the delivery waypoint
         if (isShipCargoHoldEmpty(ship_json)){
+            // and its cargo hold is empty
             if (isShipDocked(ship_json)){
                 orbitShip(ship_symbol);
             }
+            // go to the asteroid belt
             navigateShip(ship_symbol, asteroid_belt_symbol);
         } else {
             // ship is at delivery waypoint, and its cargo hold is not empty.
@@ -618,8 +631,6 @@ void applyRoleMiner(const string ship_symbol){
                 const json post_deliver_inventory = deliver_result["data"]["cargo"]["inventory"];
                 for (json item: post_deliver_inventory){
                     string cargo_symbol = item["symbol"];
-                    // incorrect, ship_json is outdated and needs to be inventory.
-                    // requires that howMuch method is updated to accept inventory rather than ship_json
                     int units = howMuchOfCargoDoesShipHaveInCargoHold(post_deliver_inventory, cargo_symbol);
                     sellCargo(ship_symbol, cargo_symbol, units);
                 }
@@ -638,15 +649,18 @@ void applyRoleMiner(const string ship_symbol){
     if(isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         // ship is at asteroid belt.
         if(isShipCargoHoldFull(ship_json)){
+            // and its cargo hold is full
             cout << "[INFO] " + ship_symbol + " cargo hold full. Heading to delivery waypoint." << endl;
+            // goto MARKETPLACE
             navigateShip(ship_symbol, delivery_waypoint_symbol);
         } else {
-            // ship is at asteroid belt, but its cargo hold is not full.
+            // ship is at asteroid belt, but its cargo hold is not full
+            // so we mine.
             json result = extractResourcesWithSurvey(ship_symbol, best_survey);
             const string extracted_resource_symbol = result["data"]["extraction"]["yield"]["symbol"];
             const int extracted_resource_units = result["data"]["extraction"]["yield"]["units"];
                     
-            // jettison anything which is not on the resource_keep_list
+            // immidiately jettison anything which is not on the resource_keep_list
             if (!isItemWorthKeeping(extracted_resource_symbol)){
                 jettisonCargo(ship_symbol, extracted_resource_symbol, extracted_resource_units);
             }
@@ -667,10 +681,14 @@ float bestSurveyScore(){
     return best_survey_score;
 }
 
+// this is used to decide if the command frigate will survey or mine.
+// behaviour can be tuned via survey_score_threshold global
 bool isSurveyGoodEnough(){
     return (bestSurveyScore() >= survey_score_threshold ? true : false);
 }
 
+// command ship can both survey and mine, and it is good at both.
+// to maximize efficiency, it should do both depending on the quality of the best available survey
 void commandShipRoleDecider(const string ship_symbol){
 
     // do we have a good survey?
