@@ -226,7 +226,7 @@ json http_post(const string endpoint, const json payload = {}){
 }
 
 
-void registerAgent(const string callsign) {
+void registerAgent(const string callsign, const string faction) {
 
     // we don't want to ever accidently overwrite a .token file
     if (doesAuthFileExist(callsign + ".token")) {
@@ -234,9 +234,6 @@ void registerAgent(const string callsign) {
     }
 
     cout << "[INFO] Attempting to register new agent " << callsign << endl;
-    cout << "Enter faction name" << endl;
-    string faction;
-    cin >> faction;
 
     json register_agent_json_object = {};
     register_agent_json_object["symbol"] = callsign;
@@ -711,8 +708,15 @@ bool hasContractBeenAccepted(const json contract_json){
 int main(int argc, char* argv[])
 {
     // once, at the start of the run.
+
+    if (argc != 3){
+        cout << "./miningfleet CALLSIGN FACTION" << endl;
+        exit(1);
+    }
+
     callsign = argv[1];
-    registerAgent(callsign);
+    const string faction = argv[2];
+    registerAgent(callsign, faction);
     initializeGlobals();
    
     // attempting to accept an already accepted contract with throw http non-20X 
