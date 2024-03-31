@@ -15,6 +15,8 @@ using namespace std;
 
 string callsign;
 
+const json null_json = {};
+
 json contracts_list;
 json target_contract;
 string target_resource;
@@ -114,9 +116,9 @@ json http_get(const string endpoint){
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
 
         /* Check for errors */
-        if(res != CURLE_OK)
-          fprintf(stderr, "curl_easy_perform() failed: %s\n",
-                curl_easy_strerror(res));
+        if(res != CURLE_OK){
+          fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        }
 
         // parse the response body into a json object.
         json output_as_json = json::parse(*httpData);
@@ -130,7 +132,6 @@ json http_get(const string endpoint){
         curl_easy_reset(curl);
         return output_as_json;
     }
-    json null_json = {};
     return null_json;
 }
 
@@ -199,10 +200,10 @@ json http_post(const string endpoint, const json payload = {}){
        res = curl_easy_perform(curl);
 
        /* Check for curl level errors */
-       if(res != CURLE_OK)
-         fprintf(stderr, "curl_easy_perform() failed: %s\n",
-                 curl_easy_strerror(res));
-
+       if(res != CURLE_OK){
+           fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+       }
+         
        // retrieve the http response code
        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
        
@@ -221,7 +222,6 @@ json http_post(const string endpoint, const json payload = {}){
        // return the whole object and let other methods deal with it
        return output_as_json; 
      }
-    json null_json = {};
     return null_json;
 }
 
@@ -243,13 +243,15 @@ void registerAgent(const string callsign, const string faction) {
 }
 
 json getShip(const string ship_symbol){
-    string endpoint = "https://api.spacetraders.io/v2/my/ships/" + ship_symbol;
-    json result = http_get(endpoint);
-    return result;
+    return http_get("https://api.spacetraders.io/v2/my/ships/" + ship_symbol);
 }
 
 string shipSymbolFromJson(const json ship_json){
-    return ship_json["data"]["symbol"];
+    if (ship_json["data"]["symbol"].is_string()){
+        return ship_json["data"]["symbol"];
+    }
+    cout << "[ERROR] shipSymbolFromJson ship_json['data']['symbol'] not string" << endl;
+    return "";
 }
 
 json getContract(const string contract_id){
@@ -257,19 +259,19 @@ json getContract(const string contract_id){
 }
 
 json listContracts(){
-   json result = http_get("https://api.spacetraders.io/v2/my/contracts");
-   return result;
+    return http_get("https://api.spacetraders.io/v2/my/contracts");
 }
 
 void acceptContract(const string contractId) {
-    cout << "[INFO] Attempting to accept contract " + contractId << endl;
-    string endpoint = "https://api.spacetraders.io/v2/my/contracts/" + contractId + "/accept";
-    json result = http_post(endpoint);
+    cout << "[DEBUG] Attempting to accept contract " + contractId << endl;
+    http_post("https://api.spacetraders.io/v2/my/contracts/" + contractId + "/accept");
 }
 
-string find_waypoint_by_type(const string systemSymbol, const string type){
-    string endpoint = "https://api.spacetraders.io/v2/systems/" + systemSymbol + "/waypoints?type=" + type;
-    json result = http_get(endpoint);
+string findWaypointByType(const string systemSymbol, const string type){
+    json result = http_get("https://api.spacetraders.io/v2/systems/" + systemSymbol + "/waypoints?type=" + type);
+    if (!result["data"][0]["symbol"].is_string()){
+        cout << "[ERROR] findWaypointByType['data'][0]['symbol'] not string" << endl;
+    }
     return result["data"][0]["symbol"];
 }
 
@@ -290,7 +292,7 @@ void initializeGlobals(){
     cout << "[INFO] contract_fulfilled = " << target_contract["fulfilled"] << endl;
     json first_ship = getShip(callsign + "-1");
     string system_symbol = first_ship["data"]["nav"]["systemSymbol"];
-    asteroid_belt_symbol = find_waypoint_by_type(system_symbol, "ENGINEERED_ASTEROID"); 
+    asteroid_belt_symbol = findWaypointByType(system_symbol, "ENGINEERED_ASTEROID"); 
     delivery_waypoint_symbol = target_contract["terms"]["deliver"][0]["destinationSymbol"];
 
 
@@ -303,15 +305,30 @@ void initializeGlobals(){
 }
 
 bool isShipDocked(const json ship_json){
-    return (ship_json["data"]["nav"]["status"] == "DOCKED" ? true : false);
+    if (ship_json["data"]["nav"]["status"].is_string()) {
+        return (ship_json["data"]["nav"]["status"] == "DOCKED" ? true : false);
+    } else {
+        cout << "[ERROR] isShipDocked json null" << endl;
+        return false;
+    }
 }
 
 bool isShipInTransit(const json ship_json){
-    return (ship_json["data"]["nav"]["status"] == "IN_TRANSIT" ? true : false);
+    if (ship_json["data"]["nav"]["status"].is_string()) { 
+        return (ship_json["data"]["nav"]["status"] == "IN_TRANSIT" ? true : false);
+    } else {
+        cout << "[ERROR] isShipInTransit json null" << endl;
+        return false;
+    }
 }
 
 bool isShipInOrbit(const json ship_json){
-    return (ship_json["data"]["nav"]["status"] == "IN_ORBIT" ? true : false);
+    if (ship_json["data"]["nav"]["status"].is_string()) { 
+        return (ship_json["data"]["nav"]["status"] == "IN_ORBIT" ? true : false);
+    } else {
+        cout << "[ERROR] isShipInOrbit ship_json['data']['nav']['status'] not string" << endl;
+        return false;
+    }
 }
 
 void orbitShip(const string ship_symbol){
@@ -362,17 +379,31 @@ void createSurvey(const string ship_symbol){
     }
 }
 
-
-bool isShipCargoHoldFull(const json shipJson){
-    return (shipJson["data"]["cargo"]["units"] == shipJson["data"]["cargo"]["capacity"] ? true : false);
+bool isShipCargoHoldFull(const json ship_json){
+    if (!ship_json["data"]["cargo"]["units"].is_number_integer()){
+        cout << "[ERROR] isShipCargoHoldFull ship_json['data']['cargo']['units'] not integer" << endl;
+        return false;
+    }
+    if (!ship_json["data"]["cargo"]["capacity"].is_number_integer()){
+         cout << "[ERROR] isShipCargoHoldFull ship_json['data']['cargo']['capacity'] not integer" << endl;
+         return false;
+    }
+    return (ship_json["data"]["cargo"]["units"] == ship_json["data"]["cargo"]["capacity"] ? true : false);
 }
 
-bool isShipCargoHoldEmpty(const json shipJson){
-    return (shipJson["data"]["cargo"]["units"] == 0 ? true : false);
+bool isShipCargoHoldEmpty(const json ship_json){
+    if (!ship_json["data"]["cargo"]["units"].is_number_integer()){
+        cout << "[ERROR] isShipCargoHoldEmpty ship_json['data']['cargo']['units'] not integer" << endl;
+        return false;
+    }
+    return (ship_json["data"]["cargo"]["units"] == 0 ? true : false);
 }
 
 bool isShipAtWaypoint(const json ship_json, string waypoint_symbol){
     //cout << "[DEBUG] isShipAtWaypoint" << endl;
+    if (!ship_json["data"]["nav"]["waypointSymbol"].is_string()){
+        cout << "[ERROR] ship_json['data']['nav']['waypointSymbol'] not string" << endl;
+    }
     return (ship_json["data"]["nav"]["waypointSymbol"] == waypoint_symbol ? true : false);
 }
 
@@ -555,16 +586,26 @@ json deliverCargoToContract(const string contract_id, const string ship_symbol, 
 // until this is true, we do not want to sell the target_resource
 bool isContractFulfilled(const json contract_json){
     //cout << "[DEBUG] isContractFulfilled" << endl;
-    return contract_json["fulfilled"];
+    if (contract_json["fulfilled"].is_boolean()){
+        return contract_json["fulfilled"];
+    }
+    cout << "[ERROR] isContractFulfilled json null" << endl;
+    return false;
 }
 
 // only once this is true should we attempt to fulfill the contract
 bool areContractRequirementsMet(const json contract_json){
     //cout << "[DEBUG] areContractRequirementsMet" << endl;
     //printJson(contract_json);
-    const int units_fulfilled = contract_json["terms"]["deliver"][0]["unitsFulfilled"];
-    const int units_required = contract_json["terms"]["deliver"][0]["unitsRequired"];
-    return (units_fulfilled == units_required ? true : false);
+    if (contract_json["terms"]["deliver"][0]["unitsFulfilled"].is_number_integer() &&
+        contract_json["terms"]["deliver"][0]["unitsRequired"].is_number_integer()){
+            const int units_fulfilled = contract_json["terms"]["deliver"][0]["unitsFulfilled"];
+            const int units_required = contract_json["terms"]["deliver"][0]["unitsRequired"];
+            return (units_fulfilled == units_required ? true : false);
+    } else {
+        cout << "[ERROR] areContractRequirementsMet json null" << endl;
+        return false;
+    }
 }
 
 void sellCargo(const string ship_symbol, const string cargo_symbol, const int units){
@@ -572,7 +613,7 @@ void sellCargo(const string ship_symbol, const string cargo_symbol, const int un
     json payload;
     payload["symbol"] = cargo_symbol;
     payload["units"] = units;
-    json result = http_post("https://api.spacetraders.io/v2/my/ships/"+ ship_symbol + "/sell", payload);
+    json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/sell", payload);
     const json transaction = result["data"]["transaction"];
     const int units_sold = transaction["units"];
     const string trade_symbol = transaction["tradeSymbol"];
@@ -702,7 +743,10 @@ void commandShipRoleDecider(const string ship_symbol){
 }
 
 bool hasContractBeenAccepted(const json contract_json){
-    return contract_json["accepted"];
+    if (contract_json["accepted"].is_boolean()){
+        return contract_json["accepted"];
+    }
+    return false;
 }
 
 int main(int argc, char* argv[])
