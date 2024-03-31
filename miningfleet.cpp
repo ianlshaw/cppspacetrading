@@ -16,6 +16,8 @@ using namespace std;
 string callsign;
 
 const json null_json = {};
+json error_json = {{"error", "default"}};
+int http_calls = 0;
 
 json contracts_list;
 json target_contract;
@@ -120,6 +122,8 @@ json http_get(const string endpoint){
           fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
         }
 
+        http_calls++;
+
         // parse the response body into a json object.
         json output_as_json = json::parse(*httpData);
 
@@ -137,6 +141,12 @@ json http_get(const string endpoint){
 
 // libcurl wrapper. payload parameter is optional
 json http_post(const string endpoint, const json payload = {}){
+    // if payload is null here, bail. since you will at best get some garbage json in return
+    if (payload == error_json){
+        cout << "[ERROR] http_post bailed because bad payload was provided" << endl;
+        return error_json;
+    }
+
     //cout << "[INFO] Sending POST request to " << endpoint << endl;
 
     // initialize libcurl
@@ -203,6 +213,8 @@ json http_post(const string endpoint, const json payload = {}){
        if(res != CURLE_OK){
            fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
        }
+
+       http_calls++;
          
        // retrieve the http response code
        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
@@ -222,7 +234,7 @@ json http_post(const string endpoint, const json payload = {}){
        // return the whole object and let other methods deal with it
        return output_as_json; 
      }
-    return null_json;
+    return error_json;
 }
 
 
@@ -478,6 +490,8 @@ void removeExpiredSurveys(){
 // ships with this role should go to the asteroid belt and survey for the contract's target resource over and over.
 void applyRoleSurveyor(const string ship_symbol){
 
+    // this getShip is arguably superfluous since all the required info is contained in the listShips result. 
+    // but it means carefully removing ["data"] references in all reliant functions
     json ship_json = getShip(ship_symbol);
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         cout << "[INFO] " + ship_symbol + " is already on site at asteroid belt" << endl;
@@ -823,10 +837,7 @@ int main(int argc, char* argv[])
         }
 
 
-
-        //for (json ship : ships){
-        //    cout << ship["symbol"] << endl;
-        //}
+        cout << "[INFO] HTTP Calls: " << http_calls << endl;
 
         // this is arbitary but avoids most cooldown issues, and is easier on the server.
         sleep(120);
