@@ -242,6 +242,11 @@ void registerAgent(const string callsign, const string faction) {
     writeAuthTokenToFile(result["data"]["token"]);
 }
 
+json listShips(){
+    const json result = http_get("https://api.spacetraders.io/v2/my/ships");
+    return result["data"];
+}
+
 json getShip(const string ship_symbol){
     return http_get("https://api.spacetraders.io/v2/my/ships/" + ship_symbol);
 }
@@ -302,6 +307,8 @@ void initializeGlobals(){
         string import_symbol = an_import["symbol"];
         resource_keep_list.push_back(import_symbol);
     }
+
+    cout << endl;
 }
 
 bool isShipDocked(const json ship_json){
@@ -725,22 +732,51 @@ bool isSurveyGoodEnough(){
     return (bestSurveyScore() >= survey_score_threshold ? true : false);
 }
 
+
 // command ship can both survey and mine, and it is good at both.
 // to maximize efficiency, it should do both depending on the quality of the best available survey
 void commandShipRoleDecider(const string ship_symbol){
 
     // do we have a good survey?
     if (isSurveyGoodEnough()){
-        cout << "[INFO] Survey is good enough" << endl;
+        cout << "[INFO] Survey is good enough " << ship_symbol << "  will mine." << endl;
         // then lets mine.
         applyRoleMiner(ship_symbol);
 
     } else {
     // survey is not good enough. command frigate should survey.
-        cout << "[INFO] Survey is not good enough" << endl;
+        cout << "[INFO] Survey is not good enough " << ship_symbol << " will survey" << endl;
         applyRoleSurveyor(ship_symbol);
     }
 }
+
+void shipRoleApplicator(const json ship_json){
+    cout << "[DEBUG] shipRoleApplicator" << endl;
+    if (ship_json.is_null()){
+        cout << "[ERROR] shipRoleApplicator ship_json is null" << endl;
+        return;
+    }
+    if (ship_json["registration"]["role"].is_string() && ship_json["symbol"].is_string()){
+        const string role = ship_json["registration"]["role"];
+        const string ship_symbol = ship_json["symbol"];
+        if (role == "COMMAND"){
+            cout << "[INFO] " << ship_symbol << " Role identified as: " << role << endl;
+            commandShipRoleDecider(ship_symbol);
+            return;
+        }
+        if (role == "SATELLITE"){
+            cout << "[INFO] Beep Boop im a SATELLITE" << endl;
+            cout << "[INFO] " << ship_symbol << " Role identified as: " << role << endl;
+            return;
+        }
+        if (role == "EXCAVATOR"){
+            cout << "[INFO] " << ship_symbol << " Role identified as: " << role << endl;
+            applyRoleMiner(ship_symbol);
+            return;
+        }
+    }
+}
+
 
 bool hasContractBeenAccepted(const json contract_json){
     if (contract_json["accepted"].is_boolean()){
@@ -781,12 +817,21 @@ int main(int argc, char* argv[])
             //cout << "[DEBUG] AFTER removeExpiredSurveys()" << endl;
         }
 
-        // command ship can fulfill several roles, and so we have to decide
-        commandShipRoleDecider(callsign + "-1");
+        json ships = listShips();
+        for (json ship : ships){
+            shipRoleApplicator(ship);
+        }
+
+
+
+        //for (json ship : ships){
+        //    cout << ship["symbol"] << endl;
+        //}
 
         // this is arbitary but avoids most cooldown issues, and is easier on the server.
         sleep(120);
         cout << endl;
+
     }
 
     // there is currently no curl easy cleanup. i think there needs to be exactly 1. 
