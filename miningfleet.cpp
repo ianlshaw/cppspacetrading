@@ -27,12 +27,17 @@ int number_of_mining_ships = 0;
 const int desired_number_of_surveyor_ships = 1;
 int number_of_surveyor_ships = 0;
 
+string system_symbol;
 json contracts_list;
+json system_waypoints_list;
 json target_contract;
 string target_resource;
 string target_contract_id;
 string asteroid_belt_symbol;
 string delivery_waypoint_symbol;
+string mining_ship_shipyard_symbol;
+string surveyor_ship_shipyard_symbol;
+string shuttle_shipyard_symbol;
 float survey_score_threshold = 0.3;    // command frigate uses this to decide its role
 vector <string> resource_keep_list;    // storage for cargoSymbols. everything else gets jettisoned
 
@@ -279,6 +284,10 @@ json getShip(const string ship_symbol){
     return http_get("https://api.spacetraders.io/v2/my/ships/" + ship_symbol);
 }
 
+json listWaypointsInSystem(const string system_symbol){
+    return http_get("https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints");
+}
+
 string shipSymbolFromJson(const json ship_json){
     if (ship_json["data"]["symbol"].is_string()){
         return ship_json["data"]["symbol"];
@@ -304,8 +313,48 @@ string findWaypointByType(const string systemSymbol, const string type){
     json result = http_get("https://api.spacetraders.io/v2/systems/" + systemSymbol + "/waypoints?type=" + type);
     if (!result["data"][0]["symbol"].is_string()){
         cout << "[ERROR] findWaypointByType['data'][0]['symbol'] not string" << endl;
+        return "ERROR findWaypointByType";
     }
     return result["data"][0]["symbol"];
+}
+
+json findWaypointsByTrait(const string system_symbol, const string trait){
+    json result = http_get("https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints?traits=" + trait);
+    if (result["data"].is_null()){
+        cout << "[ERROR] findWaypointsByType['data'] is null" << endl;
+        return error_json;
+    }
+    return result["data"];
+}
+
+json getShipyard(const string system_symbol, const string waypoint_symbol){
+    json result = http_get("https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints/" + waypoint_symbol + "/shipyard");
+    if (result["data"].is_null()){
+        cout << "[ERROR] getShipyard['data'] is null" << endl;
+        return error_json;
+    }
+    return result["data"];
+}
+
+string findShipyardByShipType(const string ship_type){
+    cout << "[DEBUG] findShipyardByShipType" << endl;
+    json shipyard_waypoints = findWaypointsByTrait(system_symbol, "SHIPYARD"); 
+
+    for (json waypoint : shipyard_waypoints) {
+        //cout << "[DEBUG] for (json waypoint : shipyard_waypoints)" << endl;
+        string waypoint_symbol = waypoint["symbol"];
+        json shipyard = getShipyard(system_symbol, waypoint_symbol);
+        json ship_types = shipyard["shipTypes"];
+        for (json available_ship_type : ship_types){
+            //cout << "[DEBUG] for (json available_ship_type : ship_types)" << endl;
+            string type = available_ship_type["type"];
+            if (type == ship_type){
+                //cout << "[DEBUG] (type == ship_type)" << endl;
+                return waypoint_symbol;
+            }
+        }
+    }
+    return "ERROR findShipyardByShipType";
 }
 
 json getMarket(const string system_symbol, const string waypoint_symbol){
@@ -324,9 +373,12 @@ void initializeGlobals(){
     cout << "[INFO] survey_score_threshold: " << survey_score_threshold << endl;
     cout << "[INFO] contract_fulfilled = " << target_contract["fulfilled"] << endl;
     json first_ship = getShip(callsign + "-1");
-    string system_symbol = first_ship["data"]["nav"]["systemSymbol"];
+    system_symbol = first_ship["data"]["nav"]["systemSymbol"];
+    system_waypoints_list = listWaypointsInSystem(system_symbol);
     asteroid_belt_symbol = findWaypointByType(system_symbol, "ENGINEERED_ASTEROID"); 
     delivery_waypoint_symbol = target_contract["terms"]["deliver"][0]["destinationSymbol"];
+    surveyor_ship_shipyard_symbol = findShipyardByShipType("SHIP_SURVEYOR");
+    mining_ship_shipyard_symbol = findShipyardByShipType("SHIP_MINING_DRONE");
 
 
     json get_market_result = getMarket(system_symbol, delivery_waypoint_symbol);
@@ -510,7 +562,15 @@ void applyRoleSurveyor(const json &ship_json){
         cout << "[ERROR] applyRoleSurveyor ship_json['symbol'] not a string" << endl;
         return;
     }
+
     const string ship_symbol = ship_json["symbol"];
+
+    // if ship is currently travelling, dont waste any further cycles.
+    if (isShipInTransit(ship_json)){
+        cout << "[INFO] " << ship_symbol << " is in transit" << endl;
+        return;
+    }
+
     cout << "[DEBUG] ship_symbol = " << ship_symbol << endl;
 
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
@@ -685,8 +745,20 @@ void purchaseShip(const string ship_type, const string waypoint_symbol){
         return;
     }
     const int price = result["data"]["transaction"]["price"];
-    const int balance = result ["data"]["agent"]["credits"];
-    cout << "[INFO] Purchased ship for " << price << " new balance: " << balance << endl;
+    const int balance = result["data"]["agent"]["credits"];
+    const string role = result["data"]["ship"]["registration"]["role"];
+    cout << "[INFO] Purchased " << role << " for " << price << " new balance: " << balance << endl;
+}
+
+int countShipsByRole(const json &ship_list, const string role){
+    int count = 0;
+    for (json ship: ship_list){
+        string ship_list_role = ship["registration"]["role"];
+        if (ship_list_role == role){
+            count++;
+        }
+    }
+    return count;
 }
 
 // ROLES
@@ -772,6 +844,10 @@ void applyRoleMiner(const json &ship_json){
         } else {
             // ship is at asteroid belt, but its cargo hold is not full
             // so we mine.
+            if (best_survey.is_null()){
+               cout << "[WARN] Skipping extraction cycle. No survey, no point!" << endl;
+               return;
+            }
             json result = extractResourcesWithSurvey(ship_symbol, best_survey);
             const string extracted_resource_symbol = result["extraction"]["yield"]["symbol"];
             const int extracted_resource_units = result["extraction"]["yield"]["units"];
@@ -781,20 +857,40 @@ void applyRoleMiner(const json &ship_json){
                 jettisonCargo(ship_symbol, extracted_resource_symbol, extracted_resource_units);
             }
         }
+    } else {
+        if (isShipDocked(ship_json)){
+            orbitShip(ship_symbol);
+        }
+        navigateShip(ship_symbol, asteroid_belt_symbol);
     }
 }
 
 void applyRoleSatellite(const json &ship_json){
+    const string ship_symbol = ship_json["symbol"];
     cout << "[INFO] Beep Boop im a SATELLITE" << endl;
     if (number_of_surveyor_ships < desired_number_of_surveyor_ships){
         //buy surveyor ship
-        //isShipAtWaypoint(ship_json, shipyard_waypoint_symbol){
-        //    purchaseShip("MINING_DRONE", shipyard_waypoint_symbol);
-        //} 
+        if (isShipAtWaypoint(ship_json, surveyor_ship_shipyard_symbol)){
+            purchaseShip("SHIP_SURVEYOR", surveyor_ship_shipyard_symbol);
+        } else {
+            if (isShipDocked(ship_json)){
+                orbitShip(ship_symbol);
+            }
+            navigateShip(ship_symbol, surveyor_ship_shipyard_symbol);
+            return;
+        }
     }
 
     if (number_of_mining_ships < desired_number_of_mining_ships){
         // buy mining ship
+        if (isShipAtWaypoint(ship_json, mining_ship_shipyard_symbol)){
+            purchaseShip("SHIP_MINING_DRONE", mining_ship_shipyard_symbol);
+        } else {
+            if (isShipDocked(ship_json)){
+                orbitShip(ship_symbol);
+            }
+            navigateShip(ship_symbol, mining_ship_shipyard_symbol);
+        }
     }
 }
 
@@ -838,7 +934,7 @@ void commandShipRoleDecider(const json &ship_json){
 }
 
 void shipRoleApplicator(const json &ship_json){
-    cout << "[DEBUG] shipRoleApplicator" << endl;
+    //cout << "[DEBUG] shipRoleApplicator" << endl;
     if (ship_json.is_null()){
         cout << "[ERROR] shipRoleApplicator ship_json is null" << endl;
         return;
@@ -897,6 +993,10 @@ int main(int argc, char* argv[])
 
     int turn_number = 0;
 
+    // AD HOC TESTING
+    //exit(0)
+
+
     // every turn...
     while (true){
         turn_number++;
@@ -909,13 +1009,19 @@ int main(int argc, char* argv[])
         }
 
         json ships = listShips();
+
+        number_of_surveyor_ships = countShipsByRole(ships, "SURVEYOR");
+        number_of_mining_ships = countShipsByRole(ships, "EXCAVATOR");
+
         for (json ship : ships){
             shipRoleApplicator(ship);
+            cout << endl;
         }
 
         cout << "[INFO] HTTP Calls: " << http_calls << endl;
 
         // this is arbitary but avoids most cooldown issues, and is easier on the server.
+        // eventually ships should pass their cooldown into this.
         sleep(120);
         cout << endl;
         http_calls = 0;
