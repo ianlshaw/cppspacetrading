@@ -28,7 +28,7 @@ string target_resource;
 string target_contract_id;
 string asteroid_belt_symbol;
 string delivery_waypoint_symbol;
-float survey_score_threshold = 0.3;    // command frigate uses this to decide its role
+float survey_score_threshold = 0.1;    // command frigate uses this to decide its role
 vector <string> resource_keep_list;    // storage for cargoSymbols. everything else gets jettisoned
 
 // this is needed by libcurl to retrieve data from the HTTP responses the server will send us
@@ -235,7 +235,7 @@ json http_post(const string endpoint, const json payload = {}){
 
        // print entire response body when http return code is non-20X
        if (httpCode != 200 && httpCode != 201){
-           cout << "http post error" << endl;
+           cout << "[WARN] http_post() returned non-20X" << endl;
            printJson(output_as_json);
        }
 
@@ -334,29 +334,28 @@ void initializeGlobals(){
     cout << endl;
 }
 
-bool isShipDocked(const json ship_json){
-    if (ship_json["data"]["nav"]["status"].is_string()) {
-        return (ship_json["data"]["nav"]["status"] == "DOCKED" ? true : false);
+bool isShipDocked(const json &ship_json){
+    if (ship_json["nav"]["status"].is_string()) {
+        return (ship_json["nav"]["status"] == "DOCKED" ? true : false);
     } else {
-        cout << "[ERROR] isShipDocked json null" << endl;
+        cout << "[ERROR] isShipDocked ship_json['nav]['status'] is not string" << endl;
         return false;
     }
 }
 
-bool isShipInTransit(const json ship_json){
-    if (ship_json["data"]["nav"]["status"].is_string()) { 
-        return (ship_json["data"]["nav"]["status"] == "IN_TRANSIT" ? true : false);
-    } else {
-        cout << "[ERROR] isShipInTransit json null" << endl;
+bool isShipInTransit(const json &ship_json){
+    if (!ship_json["nav"]["status"].is_string()) { 
+        cout << "[ERROR] isShipInTransit ship_json['nav']['status'] is not a string" << endl;
         return false;
     }
+     return (ship_json["nav"]["status"] == "IN_TRANSIT" ? true : false);
 }
 
-bool isShipInOrbit(const json ship_json){
-    if (ship_json["data"]["nav"]["status"].is_string()) { 
-        return (ship_json["data"]["nav"]["status"] == "IN_ORBIT" ? true : false);
+bool isShipInOrbit(const json &ship_json){
+    if (ship_json["nav"]["status"].is_string()) { 
+        return (ship_json["nav"]["status"] == "IN_ORBIT" ? true : false);
     } else {
-        cout << "[ERROR] isShipInOrbit ship_json['data']['nav']['status'] not string" << endl;
+        cout << "[ERROR] isShipInOrbit ship_json['nav']['status'] not string" << endl;
         return false;
     }
 }
@@ -409,32 +408,32 @@ void createSurvey(const string ship_symbol){
     }
 }
 
-bool isShipCargoHoldFull(const json ship_json){
-    if (!ship_json["data"]["cargo"]["units"].is_number_integer()){
-        cout << "[ERROR] isShipCargoHoldFull ship_json['data']['cargo']['units'] not integer" << endl;
+bool isShipCargoHoldFull(const json &ship_json){
+    if (!ship_json["cargo"]["units"].is_number_integer()){
+        cout << "[ERROR] isShipCargoHoldFull ship_json['cargo']['units'] not integer" << endl;
         return false;
     }
-    if (!ship_json["data"]["cargo"]["capacity"].is_number_integer()){
-         cout << "[ERROR] isShipCargoHoldFull ship_json['data']['cargo']['capacity'] not integer" << endl;
+    if (!ship_json["cargo"]["capacity"].is_number_integer()){
+         cout << "[ERROR] isShipCargoHoldFull ship_json['cargo']['capacity'] not integer" << endl;
          return false;
     }
-    return (ship_json["data"]["cargo"]["units"] == ship_json["data"]["cargo"]["capacity"] ? true : false);
+    return (ship_json["cargo"]["units"] == ship_json["cargo"]["capacity"] ? true : false);
 }
 
-bool isShipCargoHoldEmpty(const json ship_json){
-    if (!ship_json["data"]["cargo"]["units"].is_number_integer()){
-        cout << "[ERROR] isShipCargoHoldEmpty ship_json['data']['cargo']['units'] not integer" << endl;
+bool isShipCargoHoldEmpty(const json &ship_json){
+    if (!ship_json["cargo"]["units"].is_number_integer()){
+        cout << "[ERROR] isShipCargoHoldEmpty ship_json['cargo']['units'] not integer" << endl;
         return false;
     }
-    return (ship_json["data"]["cargo"]["units"] == 0 ? true : false);
+    return (ship_json["cargo"]["units"] == 0 ? true : false);
 }
 
-bool isShipAtWaypoint(const json ship_json, string waypoint_symbol){
+bool isShipAtWaypoint(const json &ship_json, string waypoint_symbol){
     //cout << "[DEBUG] isShipAtWaypoint" << endl;
-    if (!ship_json["data"]["nav"]["waypointSymbol"].is_string()){
-        cout << "[ERROR] ship_json['data']['nav']['waypointSymbol'] not string" << endl;
+    if (!ship_json["nav"]["waypointSymbol"].is_string()){
+        cout << "[ERROR] ship_json['nav']['waypointSymbol'] not string" << endl;
     }
-    return (ship_json["data"]["nav"]["waypointSymbol"] == waypoint_symbol ? true : false);
+    return (ship_json["nav"]["waypointSymbol"] == waypoint_symbol ? true : false);
 }
 
 bool isSurveyListEmpty(){
@@ -499,17 +498,23 @@ void removeExpiredSurveys(){
 }
 
 // ships with this role should go to the asteroid belt and survey for the contract's target resource over and over.
-void applyRoleSurveyor(const string ship_symbol){
+void applyRoleSurveyor(const json &ship_json){
+    cout << "[DEBUG] applyRoleSurveyor" << endl;
 
-    // this getShip is arguably superfluous since all the required info is contained in the listShips result. 
-    // but it means carefully removing ["data"] references in all reliant functions
-    json ship_json = getShip(ship_symbol);
+    if (!ship_json["symbol"].is_string()){
+        cout << "[ERROR] applyRoleSurveyor ship_json['symbol'] not a string" << endl;
+        return;
+    }
+    const string ship_symbol = ship_json["symbol"];
+    cout << "[DEBUG] ship_symbol = " << ship_symbol << endl;
+
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         cout << "[INFO] " + ship_symbol + " is already on site at asteroid belt" << endl;
         createSurvey(ship_symbol);
     } else {
-        if (isShipDocked(ship_json))
+        if (isShipDocked(ship_json)){
             orbitShip(ship_symbol);
+        }
         navigateShip(ship_symbol, asteroid_belt_symbol);
     }
 }
@@ -568,7 +573,7 @@ json extractResourcesWithSurvey(const string ship_symbol, const json target_surv
          << capacity 
          << "]" 
          << endl;
-    return result;
+    return result["data"];
 }
 
 void refuelShip(const string ship_symbol){
@@ -578,8 +583,8 @@ void refuelShip(const string ship_symbol){
     cout << "[INFO] " << ship_symbol  << " refuelled costing " << transaction["totalPrice"] << endl;
 }
 
-int howMuchOfCargoDoesShipHaveInCargoHold(const json inventory, const string cargo_symbol){
-    //cout << "[DEBUG] howMuchOfCargoDoesShipHaveInCargoHold " + cargo_symbol << endl;
+int cargoCount(const json inventory, const string cargo_symbol){
+    //cout << "[DEBUG] cargoCount " + cargo_symbol << endl;
     
     for (json item: inventory){
         if (item["symbol"] == cargo_symbol){
@@ -606,17 +611,29 @@ json deliverCargoToContract(const string contract_id, const string ship_symbol, 
     payload["tradeSymbol"] = trade_symbol;
     payload["units"] = units;
     json result = http_post("https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/deliver", payload);
+
+    if (!result["data"]["contract"]["terms"]["deliver"][0]["unitsFulfilled"].is_number_integer()){
+        cout << "[ERROR] deliverCargoToContract result['data']['contract']['terms']['deliver'][0]['unitsFulfilled'] " <<
+                "is not an integer" << endl;
+        return error_json;
+    }
+
+    if (!result["data"]["contract"]["terms"]["deliver"][0]["unitsRequired"].is_number_integer()){
+        cout << "[ERROR] deliverCargoToContract result['data']['contract']['terms']['deliver'][0]['unitsRequired'] " <<
+                " is not an integer" << endl;
+    }
+
     int units_fulfilled = result["data"]["contract"]["terms"]["deliver"][0]["unitsFulfilled"];
     int units_required = result["data"]["contract"]["terms"]["deliver"][0]["unitsRequired"];
 
     cout << "[INFO] " << ship_symbol << " Delivered " << units << " of " << trade_symbol 
          << " [" << units_fulfilled << "/" << units_required << "]" << endl;
 
-    return result;
+    return result["data"];
 }
 
 // until this is true, we do not want to sell the target_resource
-bool isContractFulfilled(const json contract_json){
+bool isContractFulfilled(const json &contract_json){
     //cout << "[DEBUG] isContractFulfilled" << endl;
     if (contract_json["fulfilled"].is_boolean()){
         return contract_json["fulfilled"];
@@ -657,14 +674,21 @@ void sellCargo(const string ship_symbol, const string cargo_symbol, const int un
 // mining ships should go to the asteroid belt and mine until full
 // then they should head to the marketplace, deliver contract goods sell everything else
 // once the contract is complete, they should sell everything.
-void applyRoleMiner(const string ship_symbol){
-    cout << "[INFO] " << ship_symbol << " applyRoleMiner" << endl;
+void applyRoleMiner(const json &ship_json){
+    cout << "[DEBUG] applyRoleMiner" << endl;
 
-    // get ship state
-    json ship_json = getShip(ship_symbol);
+    if (!ship_json["symbol"].is_string()){
+        cout << "[ERROR] applyRoleMiner ship_json['symbol'] is not a string" << endl;
+        return;
+    }
+
+    const string ship_symbol = ship_json["symbol"];
+
+    cout << "[INFO] " << ship_symbol << " applyRoleMiner" << endl;
 
     // if ship is currently travelling, dont waste any further cycles.
     if (isShipInTransit(ship_json)){
+        cout << "[WARN] " << ship_symbol << " is in transit" << endl;
         return;
     }
 
@@ -687,29 +711,31 @@ void applyRoleMiner(const string ship_symbol){
             if (!isContractFulfilled(target_contract)){
                 // until the contract is complete, we prioritize delivering its goods.
                 // and only sell whats left
-                const json inventory = ship_json["data"]["cargo"]["inventory"];
-                int units = howMuchOfCargoDoesShipHaveInCargoHold(inventory, target_resource);
+
+                // TODO verify this is an array/object before attempting to assign it.
+                const json inventory = ship_json["cargo"]["inventory"];
+                int units = cargoCount(inventory, target_resource);
                 const json deliver_result = deliverCargoToContract(target_contract_id, ship_symbol, target_resource, units);
 
                 // check if the contract can be handed in
-                const json contract_after_delivery = deliver_result["data"]["contract"];
+                const json contract_after_delivery = deliver_result["contract"];
                 if (areContractRequirementsMet(contract_after_delivery)){
                     fulfillContract(target_contract_id);
                 }
 
                 // sell what remains in the cargo hold after delvering to the contract
-                const json post_deliver_inventory = deliver_result["data"]["cargo"]["inventory"];
+                const json post_deliver_inventory = deliver_result["cargo"]["inventory"];
                 for (json item: post_deliver_inventory){
                     string cargo_symbol = item["symbol"];
-                    int units = howMuchOfCargoDoesShipHaveInCargoHold(post_deliver_inventory, cargo_symbol);
+                    int units = cargoCount(post_deliver_inventory, cargo_symbol);
                     sellCargo(ship_symbol, cargo_symbol, units);
                 }
             } else {
                 // contract is fulfilled, sell everything
-                const json inventory = ship_json["data"]["cargo"]["inventory"];
+                const json inventory = ship_json["cargo"]["inventory"];
                 for (json item: inventory){
                     string cargo_symbol = item["symbol"];
-                    int units = howMuchOfCargoDoesShipHaveInCargoHold(inventory, cargo_symbol);
+                    int units = cargoCount(inventory, cargo_symbol);
                     sellCargo(ship_symbol, cargo_symbol, units);
                 }
             }
@@ -727,8 +753,8 @@ void applyRoleMiner(const string ship_symbol){
             // ship is at asteroid belt, but its cargo hold is not full
             // so we mine.
             json result = extractResourcesWithSurvey(ship_symbol, best_survey);
-            const string extracted_resource_symbol = result["data"]["extraction"]["yield"]["symbol"];
-            const int extracted_resource_units = result["data"]["extraction"]["yield"]["units"];
+            const string extracted_resource_symbol = result["extraction"]["yield"]["symbol"];
+            const int extracted_resource_units = result["extraction"]["yield"]["units"];
                     
             // immidiately jettison anything which is not on the resource_keep_list
             if (!isItemWorthKeeping(extracted_resource_symbol)){
@@ -760,22 +786,24 @@ bool isSurveyGoodEnough(){
 
 // command ship can both survey and mine, and it is good at both.
 // to maximize efficiency, it should do both depending on the quality of the best available survey
-void commandShipRoleDecider(const string ship_symbol){
+void commandShipRoleDecider(const json &ship_json){
+
+    const string ship_symbol = ship_json["symbol"];
 
     // do we have a good survey?
     if (isSurveyGoodEnough()){
         cout << "[INFO] Survey is good enough " << ship_symbol << "  will mine." << endl;
         // then lets mine.
-        applyRoleMiner(ship_symbol);
+        applyRoleMiner(ship_json);
 
     } else {
     // survey is not good enough. command frigate should survey.
         cout << "[INFO] Survey is not good enough " << ship_symbol << " will survey" << endl;
-        applyRoleSurveyor(ship_symbol);
+        applyRoleSurveyor(ship_json);
     }
 }
 
-void shipRoleApplicator(const json ship_json){
+void shipRoleApplicator(const json &ship_json){
     cout << "[DEBUG] shipRoleApplicator" << endl;
     if (ship_json.is_null()){
         cout << "[ERROR] shipRoleApplicator ship_json is null" << endl;
@@ -786,7 +814,7 @@ void shipRoleApplicator(const json ship_json){
         const string ship_symbol = ship_json["symbol"];
         if (role == "COMMAND"){
             cout << "[INFO] " << ship_symbol << " Role identified as: " << role << endl;
-            commandShipRoleDecider(ship_symbol);
+            commandShipRoleDecider(ship_json);
             return;
         }
         if (role == "SATELLITE"){
@@ -853,6 +881,7 @@ int main(int argc, char* argv[])
         // this is arbitary but avoids most cooldown issues, and is easier on the server.
         sleep(120);
         cout << endl;
+        http_calls = 0;
 
     }
 
