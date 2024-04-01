@@ -19,6 +19,9 @@ const json null_json = {};
 json error_json = {{"error", "default"}};
 int http_calls = 0;
 
+const int max_retries = 5;
+const int retry_delay = 5;
+
 json contracts_list;
 json target_contract;
 string target_resource;
@@ -113,15 +116,20 @@ json http_get(const string endpoint){
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, httpData.get());
    
-        /* Perform the request, res gets the return code */
-        res = curl_easy_perform(curl);
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-
+        for (int i = 1; i <= max_retries &&
+            (res = curl_easy_perform(curl)) != CURLE_OK; i++) {
+                cout << "[WARN] HTTP error, retrying..." << endl;
+                sleep(retry_delay);
+        }
+        
         /* Check for errors */
         if(res != CURLE_OK){
           fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
         }
 
+        // populate httpCode for later use
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+        
         http_calls++;
 
         // parse the response body into a json object.
@@ -206,8 +214,11 @@ json http_post(const string endpoint, const json payload = {}){
        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
        curl_easy_setopt(curl, CURLOPT_WRITEDATA, httpData.get());
    
-       /* Perform the request, res gets the return code */
-       res = curl_easy_perform(curl);
+       for (int i = 1; i <= max_retries &&
+           (res = curl_easy_perform(curl)) != CURLE_OK; i++) {
+               cout << "[WARN] HTTP error, retrying..." << endl;
+               sleep(retry_delay);
+       }
 
        /* Check for curl level errors */
        if(res != CURLE_OK){
