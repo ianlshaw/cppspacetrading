@@ -20,7 +20,12 @@ json error_json = {{"error", "default"}};
 int http_calls = 0;
 
 const int max_retries = 5;
-const int retry_delay = 5;
+const int retry_delay = 30;
+
+const int desired_number_of_mining_ships = 1;
+int number_of_mining_ships = 0;
+const int desired_number_of_surveyor_ships = 1;
+int number_of_surveyor_ships = 0;
 
 json contracts_list;
 json target_contract;
@@ -28,7 +33,7 @@ string target_resource;
 string target_contract_id;
 string asteroid_belt_symbol;
 string delivery_waypoint_symbol;
-float survey_score_threshold = 0.1;    // command frigate uses this to decide its role
+float survey_score_threshold = 0.3;    // command frigate uses this to decide its role
 vector <string> resource_keep_list;    // storage for cargoSymbols. everything else gets jettisoned
 
 // this is needed by libcurl to retrieve data from the HTTP responses the server will send us
@@ -671,6 +676,21 @@ void sellCargo(const string ship_symbol, const string cargo_symbol, const int un
          << " " << trade_symbol << " for " << total_price << endl;
 }
 
+void purchaseShip(const string ship_type, const string waypoint_symbol){
+    json payload;
+    payload["shipType"] = ship_type;
+    payload["waypointSymbol"] = waypoint_symbol;
+    const json result = http_post("https://api.spacetraders.io/v2/my/ships", payload);
+    if (result["data"].is_null()){
+        return;
+    }
+    const int price = result["data"]["transaction"]["price"];
+    const int balance = result ["data"]["agent"]["credits"];
+    cout << "[INFO] Purchased ship for " << price << " new balance: " << balance << endl;
+}
+
+// ROLES
+
 // mining ships should go to the asteroid belt and mine until full
 // then they should head to the marketplace, deliver contract goods sell everything else
 // once the contract is complete, they should sell everything.
@@ -764,6 +784,20 @@ void applyRoleMiner(const json &ship_json){
     }
 }
 
+void applyRoleSatellite(const json &ship_json){
+    cout << "[INFO] Beep Boop im a SATELLITE" << endl;
+    if (number_of_surveyor_ships < desired_number_of_surveyor_ships){
+        //buy surveyor ship
+        //isShipAtWaypoint(ship_json, shipyard_waypoint_symbol){
+        //    purchaseShip("MINING_DRONE", shipyard_waypoint_symbol);
+        //} 
+    }
+
+    if (number_of_mining_ships < desired_number_of_mining_ships){
+        // buy mining ship
+    }
+}
+
 float bestSurveyScore(){
     float best_survey_score = 0.0;
     for(survey item: surveys){
@@ -818,14 +852,18 @@ void shipRoleApplicator(const json &ship_json){
             return;
         }
         if (role == "SATELLITE"){
-            cout << "[INFO] Beep Boop im a SATELLITE" << endl;
             cout << "[INFO] " << ship_symbol << " Role identified as: " << role << endl;
+            applyRoleSatellite(ship_json);
             return;
         }
         if (role == "EXCAVATOR"){
             cout << "[INFO] " << ship_symbol << " Role identified as: " << role << endl;
-            applyRoleMiner(ship_symbol);
+            applyRoleMiner(ship_json);
             return;
+        }
+        if (role == "SURVEYOR"){
+            cout << "[INFO] " << ship_symbol << " Role identified as: " << role << endl;
+            applyRoleSurveyor(ship_json);
         }
     }
 }
@@ -874,7 +912,6 @@ int main(int argc, char* argv[])
         for (json ship : ships){
             shipRoleApplicator(ship);
         }
-
 
         cout << "[INFO] HTTP Calls: " << http_calls << endl;
 
