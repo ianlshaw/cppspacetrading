@@ -27,6 +27,7 @@ const int desired_number_of_shuttle_ships = 1;
 int number_of_surveyor_ships = 0;
 int number_of_mining_ships = 0;
 int number_of_shuttle_ships = 0;
+bool transport_is_on_site = false;
 
 // lazy
 string transport_ship_symbol;
@@ -792,6 +793,7 @@ void transferAllCargo(const json &source_ship_json, const string destination_shi
                 const int cargo_units = result["error"]["data"]["cargoUnits"];
                 const int remaining_space = cargo_capacity - cargo_units;
                 transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, remaining_space);
+                return;
             }
         }
     }
@@ -846,41 +848,52 @@ void applyRoleMiner(const json &ship_json){
         return;
     }
 
-    if(isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
-        // ship is at asteroid belt.
-        if(isShipCargoHoldFull(ship_json)){
-            // and its cargo hold is full
-            cout << "[INFO] " + ship_symbol + " cargo hold full. I need a transport." << endl;
-            // transfer cargo to transport
-            transferAllCargo(ship_json, transport_ship_symbol);
-            
-        } else {
-            // ship is at asteroid belt, but its cargo hold is not full
-            // so we mine.
-            if (best_survey.is_null()){
-               cout << "[WARN] Skipping extraction cycle. No survey, no point!" << endl;
-               return;
-            }
-            json result = extractResourcesWithSurvey(ship_symbol, best_survey);
-            const string extracted_resource_symbol = result["extraction"]["yield"]["symbol"];
-            const int extracted_resource_units = result["extraction"]["yield"]["units"];
-                    
-            // immidiately jettison anything which is not on the resource_keep_list
-            if (!isItemWorthKeeping(extracted_resource_symbol)){
-                jettisonCargo(ship_symbol, extracted_resource_symbol, extracted_resource_units);
-            }
-        }
-    } else {
+    // if mining ship is not at the asteroid belt. undock and go there.
+    if (!isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         if (isShipDocked(ship_json)){
             orbitShip(ship_symbol);
         }
         navigateShip(ship_symbol, asteroid_belt_symbol);
+        return;
+    }
+
+    // ship is at asteroid belt.
+    if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
+        // make space for current mining cycle.
+        if (!isShipCargoHoldEmpty(ship_json)){
+            // is transport ship on site?
+            if (transport_is_on_site){
+                transferAllCargo(ship_json, transport_ship_symbol);
+            }
+        }
+
+        // if there is no survey, we may as well wait.
+        if (best_survey.is_null()){
+            cout << "[WARN] No survey no point, boss." << endl;
+            return;
+        }
+
+        // mining while full yields no resources and wastes http calls.
+        if (isShipCargoHoldFull(ship_json)){
+            cout << "[WARN] Cargo full, best not to break the mining heads for nothing, boss." << endl;
+            return;
+        }
+
+        // execute mining operation
+        const json result = extractResourcesWithSurvey(ship_symbol, best_survey);
+        const string extracted_resource_symbol = result["extraction"]["yield"]["symbol"];
+        const int extracted_resource_units = result["extraction"]["yield"]["units"];
+                
+        // immidiately jettison anything which is not on the resource_keep_list
+        if (!isItemWorthKeeping(extracted_resource_symbol)){
+            jettisonCargo(ship_symbol, extracted_resource_symbol, extracted_resource_units);
+        }
+
     }
 }
 
 void applyRoleSatellite(const json &ship_json){
 
-    
     const string ship_symbol = ship_json["symbol"];
 
     if (isShipInTransit(ship_json)){
@@ -888,7 +901,6 @@ void applyRoleSatellite(const json &ship_json){
         return;
     }
 
-    cout << "[INFO] Beep Boop im a SATELLITE" << endl;
     if (number_of_surveyor_ships < desired_number_of_surveyor_ships){
         //buy surveyor ship
         if (isShipAtWaypoint(ship_json, surveyor_ship_shipyard_symbol)){
@@ -921,7 +933,8 @@ void applyRoleSatellite(const json &ship_json){
         }
     }
 
-    if (number_of_mining_ships < desired_number_of_mining_ships){
+    // only purchase an excavator once we have a shuttle.
+    if (number_of_mining_ships < desired_number_of_mining_ships && number_of_shuttle_ships >= desired_number_of_shuttle_ships){
         // buy mining ship
         if (isShipAtWaypoint(ship_json, mining_ship_shipyard_symbol)){
             if (!isShipDocked(ship_json)){
@@ -936,8 +949,7 @@ void applyRoleSatellite(const json &ship_json){
             return;
         }
     }
-
-
+    cout << "[INFO] Beep Boop im a SATELLITE" << endl;
 }
 
 void applyRoleTransport(const json &ship_json){
@@ -949,8 +961,12 @@ void applyRoleTransport(const json &ship_json){
     }
 
     const string ship_symbol = ship_json["symbol"];
+    const int capacity = ship_json["cargo"]["capacity"];
+    const int units = ship_json["cargo"]["units"];
 
-    cout << "[INFO] " << ship_symbol << " applyRoleTransport" << endl;
+    // this is already out of date since the ship_json it is based on was taken from the listShips at the start
+    // each ship really needs the getShip call we've avoided for this long to ensure its data is up to date during its own role execution
+    cout << "[INFO] " << ship_symbol << " applyRoleTransport " << units << "/" << capacity << endl;
 
     // if ship is currently travelling, dont waste any further cycles.
     if (isShipInTransit(ship_json)){
@@ -958,30 +974,31 @@ void applyRoleTransport(const json &ship_json){
         return;
     }
 
+    // mining ships need some way to know if the transport is present at the same waypoint.
+    if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
+        transport_is_on_site = true; 
+    } else {
+        transport_is_on_site = false;
+    }
 
+    // once full, leave the asteroid belt and head to the marketplace
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol) && isShipCargoHoldFull(ship_json)){
         cout << "[INFO] " << ship_symbol << " full. Heading to delivery waypoint" << endl;
         navigateShip(ship_symbol, delivery_waypoint_symbol);
+        transport_is_on_site = false;
         return;
     }
 
 
+    // ship is at the delivery waypoint
     if (isShipAtWaypoint(ship_json, delivery_waypoint_symbol)){
-        // ship is at the delivery waypoint
-        if (isShipCargoHoldEmpty(ship_json)){
-            // and its cargo hold is empty
-            if (isShipDocked(ship_json)){
-                orbitShip(ship_symbol);
-            }
-            // go to the asteroid belt
-            navigateShip(ship_symbol, asteroid_belt_symbol);
-        } else {
-            // ship is at delivery waypoint, and its cargo hold is not empty.
-            if (isShipInOrbit(ship_json)){
-                dockShip(ship_symbol);
+        // we have something to hand in or sell
+        if (!isShipCargoHoldEmpty(ship_json)){
+            // dock if we arent already
+            if (!isShipDocked(ship_json)){
+                dockShip(ship_symbol); 
             }
             refuelShip(ship_symbol);
-
             if (!isContractFulfilled(target_contract)){
                 // until the contract is complete, we prioritize delivering its goods.
                 // and only sell whats left
@@ -1004,6 +1021,10 @@ void applyRoleTransport(const json &ship_json){
                     int units = cargoCount(post_deliver_inventory, cargo_symbol);
                     sellCargo(ship_symbol, cargo_symbol, units);
                 }
+                // once everything is sold, head back to the belt
+                orbitShip(ship_symbol);
+                navigateShip(ship_symbol, asteroid_belt_symbol);
+                return;
             } else {
                 // contract is fulfilled, sell everything
                 const json inventory = ship_json["cargo"]["inventory"];
@@ -1012,15 +1033,19 @@ void applyRoleTransport(const json &ship_json){
                     int units = cargoCount(inventory, cargo_symbol);
                     sellCargo(ship_symbol, cargo_symbol, units);
                 }
+                // once everything is sold, head back to the belt
+                orbitShip(ship_symbol);
+                navigateShip(ship_symbol, asteroid_belt_symbol);
+                return;
             }
+        } 
+    }
+    // catch all. if the ship is somewhere other than asteroid belt or marketplace, move it to the asteroid belt.
+    if (!isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
+        if (isShipDocked(ship_json)){
+            orbitShip(ship_symbol);
         }
-    } else {
-       if (!isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
-           if (isShipDocked(ship_json)){
-               orbitShip(ship_symbol);
-           }
-           navigateShip(ship_symbol, asteroid_belt_symbol);
-       } 
+        navigateShip(ship_symbol, asteroid_belt_symbol);
     }
 }
 
