@@ -763,14 +763,13 @@ void purchaseShip(const string ship_type, const string waypoint_symbol){
     cout << "[INFO] Purchased " << role << " for " << price << " new balance: " << balance << endl;
 }
 
-void transferCargo(const string source_ship_symbol, const string destination_ship_symbol, const string trade_symbol, const int units){
+json transferCargo(const string source_ship_symbol, const string destination_ship_symbol, const string trade_symbol, const int units){
     json payload;
     payload["tradeSymbol"] = trade_symbol;
     payload["units"] = units;
     payload["shipSymbol"] = destination_ship_symbol;
     const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + source_ship_symbol + "/transfer", payload);
-
-    printJson(result);
+    return result;
 }
 
 void transferAllCargo(const json &source_ship_json, const string destination_ship_symbol){
@@ -783,7 +782,18 @@ void transferAllCargo(const json &source_ship_json, const string destination_shi
     for (json item: inventory){
         const string trade_symbol = item["symbol"];
         const int units = item["units"];
-        transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, units);
+        const json result = transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, units);
+        if (result.contains("error")){
+            cout << "[DEBUG] transferAllCargo result contains error" << endl;
+            const int error_code = result["error"]["code"];
+            if (error_code == 4217){
+                cout << "[DEBUG] error code 4217 found" << endl;
+                const int cargo_capacity = result["error"]["data"]["cargoCapacity"];
+                const int cargo_units = result["error"]["data"]["cargoUnits"];
+                const int remaining_space = cargo_capacity - cargo_units;
+                transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, remaining_space);
+            }
+        }
     }
 }
 
@@ -882,6 +892,9 @@ void applyRoleSatellite(const json &ship_json){
     if (number_of_surveyor_ships < desired_number_of_surveyor_ships){
         //buy surveyor ship
         if (isShipAtWaypoint(ship_json, surveyor_ship_shipyard_symbol)){
+            if (!isShipDocked(ship_json)){
+                dockShip(ship_symbol);
+            } 
             purchaseShip("SHIP_SURVEYOR", surveyor_ship_shipyard_symbol);
         } else {
             if (isShipDocked(ship_json)){
@@ -892,9 +905,28 @@ void applyRoleSatellite(const json &ship_json){
         }
     }
 
+    if (number_of_shuttle_ships < desired_number_of_shuttle_ships){
+        // buy shuttle 
+        if (isShipAtWaypoint(ship_json, shuttle_ship_shipyard_symbol)){
+            if (!isShipDocked(ship_json)){
+                dockShip(ship_symbol);
+            }
+            purchaseShip("SHIP_LIGHT_SHUTTLE", shuttle_ship_shipyard_symbol);
+        } else {
+            if (isShipDocked(ship_json)){
+                orbitShip(ship_symbol);
+            }
+            navigateShip(ship_symbol, shuttle_ship_shipyard_symbol);
+            return;
+        }
+    }
+
     if (number_of_mining_ships < desired_number_of_mining_ships){
         // buy mining ship
         if (isShipAtWaypoint(ship_json, mining_ship_shipyard_symbol)){
+            if (!isShipDocked(ship_json)){
+                dockShip(ship_symbol);
+            }
             purchaseShip("SHIP_MINING_DRONE", mining_ship_shipyard_symbol);
         } else {
             if (isShipDocked(ship_json)){
@@ -905,17 +937,6 @@ void applyRoleSatellite(const json &ship_json){
         }
     }
 
-    if (number_of_shuttle_ships < desired_number_of_shuttle_ships){
-        // buy shuttle 
-        if (isShipAtWaypoint(ship_json, shuttle_ship_shipyard_symbol)){
-            purchaseShip("SHIP_LIGHT_SHUTTLE", shuttle_ship_shipyard_symbol);
-        } else {
-            if (isShipDocked(ship_json)){
-                orbitShip(ship_symbol);
-            }
-            navigateShip(ship_symbol, shuttle_ship_shipyard_symbol);
-        }
-    }
 
 }
 
@@ -936,6 +957,14 @@ void applyRoleTransport(const json &ship_json){
         cout << "[WARN] " << ship_symbol << " is in transit" << endl;
         return;
     }
+
+
+    if (isShipAtWaypoint(ship_json, asteroid_belt_symbol) && isShipCargoHoldFull(ship_json)){
+        cout << "[INFO] " << ship_symbol << " full. Heading to delivery waypoint" << endl;
+        navigateShip(ship_symbol, delivery_waypoint_symbol);
+        return;
+    }
+
 
     if (isShipAtWaypoint(ship_json, delivery_waypoint_symbol)){
         // ship is at the delivery waypoint
