@@ -15,17 +15,21 @@ using namespace std;
 
 string callsign;
 
-const json null_json = {};
 json error_json = {{"error", "default"}};
 int http_calls = 0;
 
 const int max_retries = 5;
 const int retry_delay = 30;
 
-const int desired_number_of_mining_ships = 1;
-int number_of_mining_ships = 0;
 const int desired_number_of_surveyor_ships = 1;
+const int desired_number_of_mining_ships = 1;
+const int desired_number_of_shuttle_ships = 1;
 int number_of_surveyor_ships = 0;
+int number_of_mining_ships = 0;
+int number_of_shuttle_ships = 0;
+
+// lazy
+string transport_ship_symbol;
 
 string system_symbol;
 json contracts_list;
@@ -37,7 +41,7 @@ string asteroid_belt_symbol;
 string delivery_waypoint_symbol;
 string mining_ship_shipyard_symbol;
 string surveyor_ship_shipyard_symbol;
-string shuttle_shipyard_symbol;
+string shuttle_ship_shipyard_symbol;
 float survey_score_threshold = 0.3;    // command frigate uses this to decide its role
 vector <string> resource_keep_list;    // storage for cargoSymbols. everything else gets jettisoned
 
@@ -152,9 +156,12 @@ json http_get(const string endpoint){
 
         //cout << "[DEBUG] curl easy reset" << endl; 
         curl_easy_reset(curl);
+        curl_easy_cleanup(curl);
         return output_as_json;
     }
-    return null_json;
+    curl_easy_cleanup(curl);
+
+    return error_json;
 }
 
 // libcurl wrapper. payload parameter is optional
@@ -246,15 +253,20 @@ json http_post(const string endpoint, const json payload = {}){
        // print entire response body when http return code is non-20X
        if (httpCode != 200 && httpCode != 201){
            cout << "[WARN] http_post() returned non-20X" << endl;
+           cout << "payload" << endl;
+           cout << payload << endl;
+           cout << "output_as_json" << endl;
            printJson(output_as_json);
        }
 
        // always reset curl handle after use   
        curl_easy_reset(curl);
+       curl_easy_cleanup(curl);
 
        // return the whole object and let other methods deal with it
        return output_as_json; 
      }
+    curl_easy_cleanup(curl);
     return error_json;
 }
 
@@ -379,6 +391,7 @@ void initializeGlobals(){
     delivery_waypoint_symbol = target_contract["terms"]["deliver"][0]["destinationSymbol"];
     surveyor_ship_shipyard_symbol = findShipyardByShipType("SHIP_SURVEYOR");
     mining_ship_shipyard_symbol = findShipyardByShipType("SHIP_MINING_DRONE");
+    shuttle_ship_shipyard_symbol = findShipyardByShipType("SHIP_LIGHT_SHUTTLE");
 
 
     json get_market_result = getMarket(system_symbol, delivery_waypoint_symbol);
@@ -556,7 +569,7 @@ void removeExpiredSurveys(){
 
 // ships with this role should go to the asteroid belt and survey for the contract's target resource over and over.
 void applyRoleSurveyor(const json &ship_json){
-    cout << "[DEBUG] applyRoleSurveyor" << endl;
+    //cout << "[DEBUG] applyRoleSurveyor" << endl;
 
     if (!ship_json["symbol"].is_string()){
         cout << "[ERROR] applyRoleSurveyor ship_json['symbol'] not a string" << endl;
@@ -571,10 +584,10 @@ void applyRoleSurveyor(const json &ship_json){
         return;
     }
 
-    cout << "[DEBUG] ship_symbol = " << ship_symbol << endl;
+    //cout << "[DEBUG] ship_symbol = " << ship_symbol << endl;
 
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
-        cout << "[INFO] " + ship_symbol + " is already on site at asteroid belt" << endl;
+        cout << "[INFO] " + ship_symbol + " is already at " << asteroid_belt_symbol << endl;
         createSurvey(ship_symbol);
     } else {
         if (isShipDocked(ship_json)){
@@ -750,6 +763,45 @@ void purchaseShip(const string ship_type, const string waypoint_symbol){
     cout << "[INFO] Purchased " << role << " for " << price << " new balance: " << balance << endl;
 }
 
+void transferCargo(const string source_ship_symbol, const string destination_ship_symbol, const string trade_symbol, const int units){
+    json payload;
+    payload["tradeSymbol"] = trade_symbol;
+    payload["units"] = units;
+    payload["shipSymbol"] = destination_ship_symbol;
+    const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + source_ship_symbol + "/transfer", payload);
+
+    printJson(result);
+}
+
+void transferAllCargo(const json &source_ship_json, const string destination_ship_symbol){
+    cout << "[DEBUG] transferAllCargo" << endl;
+
+    cout << "destination_ship_symbol = " << destination_ship_symbol << endl;
+
+    const string source_ship_symbol = source_ship_json["symbol"];
+    json inventory = source_ship_json["cargo"]["inventory"];
+    for (json item: inventory){
+        const string trade_symbol = item["symbol"];
+        const int units = item["units"];
+        transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, units);
+    }
+}
+
+// this function should identify ships with role transport as well as check if they are on site at asteroid field and have cargo cap
+string getAvailableTransport(){
+    return "a string";
+}
+
+string getTransportShipSymbol(const json &ship_list){
+    for (json ship: ship_list){
+        string ship_list_role = ship["registration"]["role"];
+        if (ship_list_role == "TRANSPORT"){
+            return ship["symbol"];
+        }
+    }
+    return "error string";
+}
+
 int countShipsByRole(const json &ship_list, const string role){
     int count = 0;
     for (json ship: ship_list){
@@ -767,7 +819,7 @@ int countShipsByRole(const json &ship_list, const string role){
 // then they should head to the marketplace, deliver contract goods sell everything else
 // once the contract is complete, they should sell everything.
 void applyRoleMiner(const json &ship_json){
-    cout << "[DEBUG] applyRoleMiner" << endl;
+    //cout << "[DEBUG] applyRoleMiner" << endl;
 
     if (!ship_json["symbol"].is_string()){
         cout << "[ERROR] applyRoleMiner ship_json['symbol'] is not a string" << endl;
@@ -776,7 +828,108 @@ void applyRoleMiner(const json &ship_json){
 
     const string ship_symbol = ship_json["symbol"];
 
-    cout << "[INFO] " << ship_symbol << " applyRoleMiner" << endl;
+    //cout << "[DEBUG] " << ship_symbol << " applyRoleMiner" << endl;
+
+    // if ship is currently travelling, dont waste any further cycles.
+    if (isShipInTransit(ship_json)){
+        cout << "[WARN] " << ship_symbol << " is in transit" << endl;
+        return;
+    }
+
+    if(isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
+        // ship is at asteroid belt.
+        if(isShipCargoHoldFull(ship_json)){
+            // and its cargo hold is full
+            cout << "[INFO] " + ship_symbol + " cargo hold full. I need a transport." << endl;
+            // transfer cargo to transport
+            transferAllCargo(ship_json, transport_ship_symbol);
+            
+        } else {
+            // ship is at asteroid belt, but its cargo hold is not full
+            // so we mine.
+            if (best_survey.is_null()){
+               cout << "[WARN] Skipping extraction cycle. No survey, no point!" << endl;
+               return;
+            }
+            json result = extractResourcesWithSurvey(ship_symbol, best_survey);
+            const string extracted_resource_symbol = result["extraction"]["yield"]["symbol"];
+            const int extracted_resource_units = result["extraction"]["yield"]["units"];
+                    
+            // immidiately jettison anything which is not on the resource_keep_list
+            if (!isItemWorthKeeping(extracted_resource_symbol)){
+                jettisonCargo(ship_symbol, extracted_resource_symbol, extracted_resource_units);
+            }
+        }
+    } else {
+        if (isShipDocked(ship_json)){
+            orbitShip(ship_symbol);
+        }
+        navigateShip(ship_symbol, asteroid_belt_symbol);
+    }
+}
+
+void applyRoleSatellite(const json &ship_json){
+
+    
+    const string ship_symbol = ship_json["symbol"];
+
+    if (isShipInTransit(ship_json)){
+        cout << "[INFO] " << ship_symbol << " is in transit." << endl;
+        return;
+    }
+
+    cout << "[INFO] Beep Boop im a SATELLITE" << endl;
+    if (number_of_surveyor_ships < desired_number_of_surveyor_ships){
+        //buy surveyor ship
+        if (isShipAtWaypoint(ship_json, surveyor_ship_shipyard_symbol)){
+            purchaseShip("SHIP_SURVEYOR", surveyor_ship_shipyard_symbol);
+        } else {
+            if (isShipDocked(ship_json)){
+                orbitShip(ship_symbol);
+            }
+            navigateShip(ship_symbol, surveyor_ship_shipyard_symbol);
+            return;
+        }
+    }
+
+    if (number_of_mining_ships < desired_number_of_mining_ships){
+        // buy mining ship
+        if (isShipAtWaypoint(ship_json, mining_ship_shipyard_symbol)){
+            purchaseShip("SHIP_MINING_DRONE", mining_ship_shipyard_symbol);
+        } else {
+            if (isShipDocked(ship_json)){
+                orbitShip(ship_symbol);
+            }
+            navigateShip(ship_symbol, mining_ship_shipyard_symbol);
+            return;
+        }
+    }
+
+    if (number_of_shuttle_ships < desired_number_of_shuttle_ships){
+        // buy shuttle 
+        if (isShipAtWaypoint(ship_json, shuttle_ship_shipyard_symbol)){
+            purchaseShip("SHIP_LIGHT_SHUTTLE", shuttle_ship_shipyard_symbol);
+        } else {
+            if (isShipDocked(ship_json)){
+                orbitShip(ship_symbol);
+            }
+            navigateShip(ship_symbol, shuttle_ship_shipyard_symbol);
+        }
+    }
+
+}
+
+void applyRoleTransport(const json &ship_json){
+    //cout << "[DEBUG] ApplyRoleTransport" << endl;
+
+    if (!ship_json["symbol"].is_string()){
+        cout << "[ERROR] applyRoleTransport ship_json['symbol'] is not a string" << endl;
+        return;
+    }
+
+    const string ship_symbol = ship_json["symbol"];
+
+    cout << "[INFO] " << ship_symbol << " applyRoleTransport" << endl;
 
     // if ship is currently travelling, dont waste any further cycles.
     if (isShipInTransit(ship_json)){
@@ -832,65 +985,13 @@ void applyRoleMiner(const json &ship_json){
                 }
             }
         }
-    }
-
-    if(isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
-        // ship is at asteroid belt.
-        if(isShipCargoHoldFull(ship_json)){
-            // and its cargo hold is full
-            cout << "[INFO] " + ship_symbol + " cargo hold full. Heading to delivery waypoint." << endl;
-            // goto MARKETPLACE
-            navigateShip(ship_symbol, delivery_waypoint_symbol);
-        } else {
-            // ship is at asteroid belt, but its cargo hold is not full
-            // so we mine.
-            if (best_survey.is_null()){
-               cout << "[WARN] Skipping extraction cycle. No survey, no point!" << endl;
-               return;
-            }
-            json result = extractResourcesWithSurvey(ship_symbol, best_survey);
-            const string extracted_resource_symbol = result["extraction"]["yield"]["symbol"];
-            const int extracted_resource_units = result["extraction"]["yield"]["units"];
-                    
-            // immidiately jettison anything which is not on the resource_keep_list
-            if (!isItemWorthKeeping(extracted_resource_symbol)){
-                jettisonCargo(ship_symbol, extracted_resource_symbol, extracted_resource_units);
-            }
-        }
     } else {
-        if (isShipDocked(ship_json)){
-            orbitShip(ship_symbol);
-        }
-        navigateShip(ship_symbol, asteroid_belt_symbol);
-    }
-}
-
-void applyRoleSatellite(const json &ship_json){
-    const string ship_symbol = ship_json["symbol"];
-    cout << "[INFO] Beep Boop im a SATELLITE" << endl;
-    if (number_of_surveyor_ships < desired_number_of_surveyor_ships){
-        //buy surveyor ship
-        if (isShipAtWaypoint(ship_json, surveyor_ship_shipyard_symbol)){
-            purchaseShip("SHIP_SURVEYOR", surveyor_ship_shipyard_symbol);
-        } else {
-            if (isShipDocked(ship_json)){
-                orbitShip(ship_symbol);
-            }
-            navigateShip(ship_symbol, surveyor_ship_shipyard_symbol);
-            return;
-        }
-    }
-
-    if (number_of_mining_ships < desired_number_of_mining_ships){
-        // buy mining ship
-        if (isShipAtWaypoint(ship_json, mining_ship_shipyard_symbol)){
-            purchaseShip("SHIP_MINING_DRONE", mining_ship_shipyard_symbol);
-        } else {
-            if (isShipDocked(ship_json)){
-                orbitShip(ship_symbol);
-            }
-            navigateShip(ship_symbol, mining_ship_shipyard_symbol);
-        }
+       if (!isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
+           if (isShipDocked(ship_json)){
+               orbitShip(ship_symbol);
+           }
+           navigateShip(ship_symbol, asteroid_belt_symbol);
+       } 
     }
 }
 
@@ -942,6 +1043,7 @@ void shipRoleApplicator(const json &ship_json){
     if (ship_json["registration"]["role"].is_string() && ship_json["symbol"].is_string()){
         const string role = ship_json["registration"]["role"];
         const string ship_symbol = ship_json["symbol"];
+
         if (role == "COMMAND"){
             cout << "[INFO] " << ship_symbol << " Role identified as: " << role << endl;
             commandShipRoleDecider(ship_json);
@@ -960,6 +1062,10 @@ void shipRoleApplicator(const json &ship_json){
         if (role == "SURVEYOR"){
             cout << "[INFO] " << ship_symbol << " Role identified as: " << role << endl;
             applyRoleSurveyor(ship_json);
+        }
+        if (role == "TRANSPORT"){
+            cout << "[INFO] " << ship_symbol << " Role identified as: " << role << endl;
+            applyRoleTransport(ship_json);
         }
     }
 }
@@ -1012,6 +1118,9 @@ int main(int argc, char* argv[])
 
         number_of_surveyor_ships = countShipsByRole(ships, "SURVEYOR");
         number_of_mining_ships = countShipsByRole(ships, "EXCAVATOR");
+        number_of_shuttle_ships = countShipsByRole(ships, "TRANSPORT");
+
+        transport_ship_symbol = getTransportShipSymbol(ships);
 
         for (json ship : ships){
             shipRoleApplicator(ship);
