@@ -25,10 +25,13 @@ const int turn_length = 120;
 const int desired_number_of_surveyor_ships = 1;
 const int desired_number_of_mining_ships = 1;
 const int desired_number_of_shuttle_ships = 1;
+
 int number_of_surveyor_ships = 0;
 int number_of_mining_ships = 0;
 int number_of_shuttle_ships = 0;
 bool transport_is_on_site = false;
+
+int credits = 0;
 
 // lazy
 string transport_ship_symbol;
@@ -66,8 +69,9 @@ namespace
 // we want to be able to 
 class survey {       
   public:           
-    float score;        // Used to prioritize which survey is used to mine 
     json surveyObject;  // Json object for an individual survey
+    int marketValue = 0;
+    float targetResourcePercentage = 0.0;        // Used to prioritize which survey is used to mine 
 };
 
 vector <survey> surveys; // Storage for the surveys we will create
@@ -272,6 +276,15 @@ json http_post(const string endpoint, const json payload = {}){
     return error_json;
 }
 
+void update_credits(const int new_credits){
+    credits = new_credits;
+    cout << "[INFO] Balance: " << credits << endl;
+}
+
+bool haveEnoughCredits(const int price){
+    return(credits > price ? true : false);
+}
+
 void registerAgent(const string callsign, const string faction) {
 
     // we don't want to ever accidently overwrite a .token file
@@ -465,24 +478,12 @@ void navigateShip(const string ship_symbol, const string waypoint_symbol){
 }
 
 void createSurvey(const string ship_symbol){
+    cout << "[DEBUG] createSurvey" << endl;
     json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/survey");
     
-    for (json individual_survey : result["data"]["surveys"]){
-        float hits = 0;
-        for (json deposit : individual_survey["deposits"]){
-            string resource = deposit["symbol"];
-            if (resource == target_resource){
-                hits++;
-            }
-        }
-
-        float deposit_size = individual_survey["deposits"].size();
-
+    for (json each_survey: result["data"]["surveys"]){
         survey a_survey;
-        float score = hits / deposit_size;
-        cout << "[INFO] Survey result: " << score << endl;
-        a_survey.score = score;
-        a_survey.surveyObject = individual_survey;
+        a_survey.surveyObject = each_survey;
         surveys.push_back(a_survey);
     }
 }
@@ -559,19 +560,85 @@ bool isSurveyExpired(const json survey){
     double seconds_until_expiry = difftime(expiration_timestamp, utc_time_now_timestamp);
     //cout << "[DEBUG] Seconds until expiry: " << seconds_until_expiry << endl;
 
-    return (seconds_until_expiry <= 5 ? true : false);
+    return (seconds_until_expiry <= 10 ? true : false);
 }
 
 
 void updateBestSurvey(){
-    for(survey item: surveys){
-        if (item.score > best_survey_score){
-            best_survey_score = item.score;
-            // probably should set this elsewhere. or just rename the function
+    //cout << "[DEBUG] updateBestSurvey" << endl;
+    //cout << "[DEBUG] surveys.size() " << surveys.size() << endl;
+
+    for (survey item: surveys){
+        if (item.targetResourcePercentage > best_survey_score){
+            best_survey_score = item.targetResourcePercentage;
             best_survey = item.surveyObject;
+            cout << "[INFO] New best survey. Score = " << best_survey_score << endl;
+            printJson(best_survey);
         }
     }
-    cout << "[INFO] Best survey score: " << best_survey_score << endl;
+}
+
+int priceCheck(const string good_to_check){
+    cout << "[DEBUG] priceCheck" << endl;
+
+    // market data will only be available after the transport has delivered/sold at least once.
+    if (market_data.is_null()){
+        cout << "[ERROR] priceCheck before market data is in. returning 0" << endl;
+        return 0;
+    }
+
+    json trade_goods = market_data["tradeGoods"];
+    for (json market_good: trade_goods){
+        if (good_to_check == market_good["symbol"]){ 
+            return market_good["sellPrice"];
+        }
+    }
+    cout << "[WARN] priceCheck good not found in market data. But market data exists. This shouldnt happen. Returning 0" << endl;
+    return 0;
+}
+
+void scoreSurveysForTargetFarming(const string trade_good){
+
+    //cout << "[DEBUG] scoreSurveysForTargetFarming" << endl;
+
+    int index = 0;
+    for (survey item: surveys){
+        float hits = 0; 
+        const json deposits = item.surveyObject["deposits"];
+        const float total_deposits = deposits.size();
+        for (json deposit: deposits){
+            const string symbol = deposit["symbol"];
+            if (symbol == trade_good){
+                hits++;
+            }
+        }
+
+        //cout << "[DEBUG] hits = " << hits << endl;
+        //cout << "[DEBUG] total_deposits = " << total_deposits << endl;
+
+        const float target_resource_percentage = hits / total_deposits;
+
+        //cout << "[DEBUG] target_resource_percentage = " << target_resource_percentage << endl;
+
+        surveys.at(index).targetResourcePercentage = target_resource_percentage;
+        index++;
+    }
+}
+
+void scoreSurveysForProfitability(){
+    cout << "[DEBUG] scoreSurveysForProfitability" << endl;
+    for (survey item: surveys){
+        int market_value = 0;
+        json survey_object = item.surveyObject;
+        json deposits = survey_object["deposits"];
+        for (json deposit: deposits){
+            string deposit_symbol = deposit["symbol"];
+            int value = priceCheck(deposit_symbol);
+            market_value = market_value + value;
+            item.marketValue = value;
+        }
+        cout << "[INFO] survey market_value: " << market_value << endl;
+    } 
 }
 
 void removeExpiredSurveys(){
@@ -581,17 +648,13 @@ void removeExpiredSurveys(){
         survey each_survey = surveys.at(vector_index);
         json each_survey_object = each_survey.surveyObject;
         if (isSurveyExpired(each_survey_object)){
-            //const string signature = each_survey_object["signature"];
-            const float survey_score = each_survey.score;
-            cout << "[INFO] Erasing expired survey " << "with score: " << survey_score << endl;
-            //cout << "[INFO] Erasing expired survey " << signature << " with score: " << survey_score << endl;
+            cout << "[INFO] Erasing expired survey " << endl;
             surveys.erase(surveys.begin() + vector_index);
             //cout << "[DEBUG] after surveys.erase" << endl;
         } else {
             vector_index++;
         }
     }
-    updateBestSurvey();
     //cout << "[DEBUG] removeExpiredSurveys AFTER WHILE LOOP" << endl;
 }
 
@@ -618,7 +681,11 @@ void applyRoleSurveyor(const json &ship_json){
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         cout << "[INFO] " + ship_symbol + " is already at " << asteroid_belt_symbol << endl;
         createSurvey(ship_symbol);
+
+        removeExpiredSurveys();
+        scoreSurveysForTargetFarming(target_resource);
         updateBestSurvey();
+
     } else {
         if (isShipDocked(ship_json)){
             orbitShip(ship_symbol);
@@ -777,6 +844,9 @@ void sellCargo(const string ship_symbol, const string cargo_symbol, const int un
     const int total_price = transaction["totalPrice"];
     cout << "[INFO] " << ship_symbol << " Sold " << units_sold 
          << " " << trade_symbol << " for " << total_price << endl;
+
+    const int new_balance = result["data"]["agent"]["credits"];
+    update_credits(new_balance);
 }
 
 void purchaseShip(const string ship_type, const string waypoint_symbol){
@@ -899,15 +969,17 @@ void applyRoleMiner(const json &ship_json){
             }
         }
 
-        // if there is no survey, we may as well wait.
-        if (best_survey.is_null()){
-            cout << "[WARN] No survey no point, boss." << endl;
-            return;
-        }
 
         // mining while full yields no resources and wastes http calls.
         if (isShipCargoHoldFull(ship_json)){
             cout << "[WARN] Cargo full, best not to break the mining heads for nothing, boss." << endl;
+            return;
+        }
+
+
+        // if there is no survey, we may as well wait.
+        if (best_survey.is_null()){
+            cout << "[WARN] No survey no point, boss." << endl;
             return;
         }
 
@@ -1164,11 +1236,6 @@ int main(int argc, char* argv[])
     while (true){
         turn_number++;
         cout << "[INFO] Turn " << turn_number << endl;
-
-        // remove expired surveys
-        if (!isSurveyListEmpty()){
-            removeExpiredSurveys();
-        }
 
         json ships = listShips();
 
