@@ -20,6 +20,7 @@ int http_calls = 0;
 
 const int max_retries = 5;
 const int retry_delay = 30;
+const int turn_length = 120;
 
 const int desired_number_of_surveyor_ships = 1;
 const int desired_number_of_mining_ships = 1;
@@ -294,7 +295,8 @@ json listShips(){
 }
 
 json getShip(const string ship_symbol){
-    return http_get("https://api.spacetraders.io/v2/my/ships/" + ship_symbol);
+    const json result = http_get("https://api.spacetraders.io/v2/my/ships/" + ship_symbol);
+    return result["data"];
 }
 
 json listWaypointsInSystem(const string system_symbol){
@@ -386,7 +388,7 @@ void initializeGlobals(){
     cout << "[INFO] survey_score_threshold: " << survey_score_threshold << endl;
     cout << "[INFO] contract_fulfilled = " << target_contract["fulfilled"] << endl;
     json first_ship = getShip(callsign + "-1");
-    system_symbol = first_ship["data"]["nav"]["systemSymbol"];
+    system_symbol = first_ship["nav"]["systemSymbol"];
     system_waypoints_list = listWaypointsInSystem(system_symbol);
     asteroid_belt_symbol = findWaypointByType(system_symbol, "ENGINEERED_ASTEROID"); 
     delivery_waypoint_symbol = target_contract["terms"]["deliver"][0]["destinationSymbol"];
@@ -1165,10 +1167,13 @@ int main(int argc, char* argv[])
         // remove expired surveys
         if (!isSurveyListEmpty()){
             removeExpiredSurveys();
-            //cout << "[DEBUG] AFTER removeExpiredSurveys()" << endl;
+            //update_best_survey();
         }
 
         json ships = listShips();
+
+        int number_of_ships = ships.size();
+        int delay_between_ships = turn_length / number_of_ships;
 
         number_of_surveyor_ships = countShipsByRole(ships, "SURVEYOR");
         number_of_mining_ships = countShipsByRole(ships, "EXCAVATOR");
@@ -1177,15 +1182,18 @@ int main(int argc, char* argv[])
         transport_ship_symbol = getTransportShipSymbol(ships);
 
         for (json ship : ships){
-            shipRoleApplicator(ship);
+            string ship_symbol = ship["symbol"];
+            json get_ship_result = getShip(ship_symbol);
+            shipRoleApplicator(get_ship_result);
             cout << endl;
+            sleep(delay_between_ships);
         }
 
         cout << "[INFO] HTTP Calls: " << http_calls << endl;
 
         // this is arbitary but avoids most cooldown issues, and is easier on the server.
         // eventually ships should pass their cooldown into this.
-        sleep(120);
+        //sleep(120);
         cout << endl;
         http_calls = 0;
 
