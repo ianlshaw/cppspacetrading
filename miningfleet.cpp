@@ -46,6 +46,7 @@ string surveyor_ship_shipyard_symbol;
 string shuttle_ship_shipyard_symbol;
 float survey_score_threshold = 0.3;    // command frigate uses this to decide its role
 vector <string> resource_keep_list;    // storage for cargoSymbols. everything else gets jettisoned
+json market_data;
 
 // this is needed by libcurl to retrieve data from the HTTP responses the server will send us
 namespace
@@ -71,6 +72,7 @@ class survey {
 
 vector <survey> surveys; // Storage for the surveys we will create
 json best_survey;        // Json object for the survey with the highest score
+float best_survey_score = 0.0;
 
 // when printing an entire json object is required, this makes it easier on the eyes
 void printJson(json jsonObject){
@@ -481,6 +483,17 @@ void createSurvey(const string ship_symbol){
     }
 }
 
+void updateBestSurvey(){
+    for(survey item: surveys){
+        if (item.score > best_survey_score){
+            best_survey_score = item.score;
+            // probably should set this elsewhere. or just rename the function
+            best_survey = item.surveyObject;
+        }
+    }
+    cout << "[INFO] Best survey score: " << best_survey_score << endl;
+}
+
 bool isShipCargoHoldFull(const json &ship_json){
     if (!ship_json["cargo"]["units"].is_number_integer()){
         cout << "[ERROR] isShipCargoHoldFull ship_json['cargo']['units'] not integer" << endl;
@@ -592,6 +605,7 @@ void applyRoleSurveyor(const json &ship_json){
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         cout << "[INFO] " + ship_symbol + " is already at " << asteroid_belt_symbol << endl;
         createSurvey(ship_symbol);
+        updateBestSurvey();
     } else {
         if (isShipDocked(ship_json)){
             orbitShip(ship_symbol);
@@ -801,6 +815,11 @@ void transferAllCargo(const json &source_ship_json, const string destination_shi
     }
 }
 
+void updateMarketData(){
+    const json result = getMarket(system_symbol, delivery_waypoint_symbol);
+    market_data = result["data"];
+}
+
 // this function should identify ships with role transport as well as check if they are on site at asteroid field and have cargo cap
 string getAvailableTransport(){
     return "a string";
@@ -846,7 +865,7 @@ void applyRoleMiner(const json &ship_json){
 
     // if ship is currently travelling, dont waste any further cycles.
     if (isShipInTransit(ship_json)){
-        cout << "[WARN] " << ship_symbol << " is in transit" << endl;
+        cout << "[INFO] " << ship_symbol << " is in transit" << endl;
         return;
     }
 
@@ -899,7 +918,7 @@ void applyRoleSatellite(const json &ship_json){
     const string ship_symbol = ship_json["symbol"];
 
     if (isShipInTransit(ship_json)){
-        cout << "[INFO] " << ship_symbol << " is in transit." << endl;
+        cout << "[INFO] " << ship_symbol << " is in transit" << endl;
         return;
     }
 
@@ -972,7 +991,7 @@ void applyRoleTransport(const json &ship_json){
 
     // if ship is currently travelling, dont waste any further cycles.
     if (isShipInTransit(ship_json)){
-        cout << "[WARN] " << ship_symbol << " is in transit" << endl;
+        cout << "[INFO] " << ship_symbol << " is in transit" << endl;
         return;
     }
 
@@ -1001,6 +1020,7 @@ void applyRoleTransport(const json &ship_json){
                 dockShip(ship_symbol); 
             }
             refuelShip(ship_symbol);
+            updateMarketData();
             if (!isContractFulfilled(target_contract)){
                 // until the contract is complete, we prioritize delivering its goods.
                 // and only sell whats left
@@ -1051,23 +1071,11 @@ void applyRoleTransport(const json &ship_json){
     }
 }
 
-float bestSurveyScore(){
-    float best_survey_score = 0.0;
-    for(survey item: surveys){
-        if (item.score > best_survey_score){
-            best_survey_score = item.score;
-            // probably should set this elsewhere. or just rename the function
-            best_survey = item.surveyObject;
-        }
-    }
-    cout << "[INFO] Best survey score: " << best_survey_score << endl;
-    return best_survey_score;
-}
 
 // this is used to decide if the command frigate will survey or mine.
 // behaviour can be tuned via survey_score_threshold global
 bool isSurveyGoodEnough(){
-    return (bestSurveyScore() >= survey_score_threshold ? true : false);
+    return (best_survey_score >= survey_score_threshold ? true : false);
 }
 
 
@@ -1167,7 +1175,6 @@ int main(int argc, char* argv[])
         // remove expired surveys
         if (!isSurveyListEmpty()){
             removeExpiredSurveys();
-            //update_best_survey();
         }
 
         json ships = listShips();
