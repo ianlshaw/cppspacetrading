@@ -109,8 +109,6 @@ string readAuthTokenFromFile(const string authTokenFile){
     return wholeDocument;
 }
 
-
-
 // wrapper to make libcurl usable enough for what we need
 json http_get(const string endpoint){
     //cout << "[INFO] Sending GET request to " << endpoint << endl;
@@ -274,7 +272,6 @@ json http_post(const string endpoint, const json payload = {}){
     return error_json;
 }
 
-
 void registerAgent(const string callsign, const string faction) {
 
     // we don't want to ever accidently overwrite a .token file
@@ -324,6 +321,13 @@ json listContracts(){
 void acceptContract(const string contractId) {
     cout << "[DEBUG] Attempting to accept contract " + contractId << endl;
     http_post("https://api.spacetraders.io/v2/my/contracts/" + contractId + "/accept");
+}
+
+bool hasContractBeenAccepted(const json contract_json){
+    if (contract_json["accepted"].is_boolean()){
+        return contract_json["accepted"];
+    }
+    return false;
 }
 
 string findWaypointByType(const string systemSymbol, const string type){
@@ -483,15 +487,10 @@ void createSurvey(const string ship_symbol){
     }
 }
 
-void updateBestSurvey(){
-    for(survey item: surveys){
-        if (item.score > best_survey_score){
-            best_survey_score = item.score;
-            // probably should set this elsewhere. or just rename the function
-            best_survey = item.surveyObject;
-        }
-    }
-    cout << "[INFO] Best survey score: " << best_survey_score << endl;
+// this is used to decide if the command frigate will survey or mine.
+// behaviour can be tuned via survey_score_threshold global
+bool isSurveyGoodEnough(){
+    return (best_survey_score >= survey_score_threshold ? true : false);
 }
 
 bool isShipCargoHoldFull(const json &ship_json){
@@ -563,6 +562,18 @@ bool isSurveyExpired(const json survey){
     return (seconds_until_expiry <= 5 ? true : false);
 }
 
+
+void updateBestSurvey(){
+    for(survey item: surveys){
+        if (item.score > best_survey_score){
+            best_survey_score = item.score;
+            // probably should set this elsewhere. or just rename the function
+            best_survey = item.surveyObject;
+        }
+    }
+    cout << "[INFO] Best survey score: " << best_survey_score << endl;
+}
+
 void removeExpiredSurveys(){
     //cout << "[DEBUG] removeExpiredSurveys" << endl;
     int vector_index = 0;
@@ -580,8 +591,10 @@ void removeExpiredSurveys(){
             vector_index++;
         }
     }
+    updateBestSurvey();
     //cout << "[DEBUG] removeExpiredSurveys AFTER WHILE LOOP" << endl;
 }
+
 
 // ships with this role should go to the asteroid belt and survey for the contract's target resource over and over.
 void applyRoleSurveyor(const json &ship_json){
@@ -792,8 +805,6 @@ json transferCargo(const string source_ship_symbol, const string destination_shi
 void transferAllCargo(const json &source_ship_json, const string destination_ship_symbol){
     cout << "[DEBUG] transferAllCargo" << endl;
 
-    cout << "destination_ship_symbol = " << destination_ship_symbol << endl;
-
     const string source_ship_symbol = source_ship_json["symbol"];
     json inventory = source_ship_json["cargo"]["inventory"];
     for (json item: inventory){
@@ -985,9 +996,7 @@ void applyRoleTransport(const json &ship_json){
     const int capacity = ship_json["cargo"]["capacity"];
     const int units = ship_json["cargo"]["units"];
 
-    // this is already out of date since the ship_json it is based on was taken from the listShips at the start
-    // each ship really needs the getShip call we've avoided for this long to ensure its data is up to date during its own role execution
-    cout << "[INFO] " << ship_symbol << " applyRoleTransport " << units << "/" << capacity << endl;
+    cout << "[INFO] " << ship_symbol << " applyRoleTransport " << "[" << units << "/" << capacity << "]" << endl;
 
     // if ship is currently travelling, dont waste any further cycles.
     if (isShipInTransit(ship_json)){
@@ -1009,7 +1018,6 @@ void applyRoleTransport(const json &ship_json){
         transport_is_on_site = false;
         return;
     }
-
 
     // ship is at the delivery waypoint
     if (isShipAtWaypoint(ship_json, delivery_waypoint_symbol)){
@@ -1071,14 +1079,6 @@ void applyRoleTransport(const json &ship_json){
     }
 }
 
-
-// this is used to decide if the command frigate will survey or mine.
-// behaviour can be tuned via survey_score_threshold global
-bool isSurveyGoodEnough(){
-    return (best_survey_score >= survey_score_threshold ? true : false);
-}
-
-
 // command ship can both survey and mine, and it is good at both.
 // to maximize efficiency, it should do both depending on the quality of the best available survey
 void commandShipRoleDecider(const json &ship_json){
@@ -1134,13 +1134,6 @@ void shipRoleApplicator(const json &ship_json){
     }
 }
 
-
-bool hasContractBeenAccepted(const json contract_json){
-    if (contract_json["accepted"].is_boolean()){
-        return contract_json["accepted"];
-    }
-    return false;
-}
 
 int main(int argc, char* argv[])
 {
