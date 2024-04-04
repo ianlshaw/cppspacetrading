@@ -462,7 +462,8 @@ bool isShipInTransit(const json &ship_json){
     const string status = ship_json["nav"]["status"];
     if (status == "IN_TRANSIT"){
         const string ship_symbol = ship_json["symbol"];
-		log("INFO", ship_symbol + " | " + status); 
+        const string role = ship_json["registration"]["role"];
+		log("INFO", ship_symbol + " | " + role + " | " + status); 
     	return true;
     } 
 	return false;
@@ -858,6 +859,9 @@ void purchaseShip(const string ship_type, const string waypoint_symbol){
 }
 
 json transferCargo(const string source_ship_symbol, const string destination_ship_symbol, const string trade_symbol, const int units){
+
+	log("DEBUG", "transferCargo " + source_ship_symbol + " " + destination_ship_symbol + " " + trade_symbol + " " + to_string(units));
+
     json payload;
     payload["tradeSymbol"] = trade_symbol;
     payload["units"] = units;
@@ -866,29 +870,30 @@ json transferCargo(const string source_ship_symbol, const string destination_shi
     return result;
 }
 
-json transferAllCargo(const json &source_ship_json, const string destination_ship_symbol){
+json transferAllCargo(const string source_ship_symbol, const string destination_ship_symbol, const json &source_ship_cargo){
     log("DEBUG", "transferAllCargo");
 
-    const string source_ship_symbol = source_ship_json["symbol"];
-    json inventory = source_ship_json["cargo"]["inventory"];
+    json result;
+
+    const json inventory = source_ship_cargo["inventory"];
     for (json item: inventory){
         const string trade_symbol = item["symbol"];
         const int units = item["units"];
-        const json result = transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, units);
+        result = transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, units);
         if (result.contains("error")){
-            cout << "[DEBUG] transferAllCargo result contains error" << endl;
+			log("DEBUG", "transferAllCargo result contains error");
             const int error_code = result["error"]["code"];
             if (error_code == 4217){
-                cout << "[DEBUG] error code 4217 found" << endl;
+				log("WARN", "error code 4217 found");
                 const int cargo_capacity = result["error"]["data"]["cargoCapacity"];
                 const int cargo_units = result["error"]["data"]["cargoUnits"];
                 const int remaining_space = cargo_capacity - cargo_units;
-                json final_result = transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, remaining_space);
-                return final_result;
+                const json result_after_failure = transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, remaining_space);
+				return result_after_failure;
             }
         }
     }
-	return error_json;
+	return result;
 }
 
 void updateMarketData(){
@@ -1028,15 +1033,16 @@ void applyRoleMiner(const json &ship_json){
         if (!isShipCargoHoldEmpty(cargo)){
             // is transport ship on site?
             if (transport_is_on_site){
-                const json transfer_result = transferAllCargo(ship_json, transport_ship_symbol);
-                cargo = transfer_result["cargo"];
+				log("INFO", "Transport is on site. Attempting transfer...");
+                const json transfer_result = transferAllCargo(ship_symbol, transport_ship_symbol, cargo);
+                cargo = transfer_result["data"]["cargo"];
                 report_cargo(cargo);
             }
         }
 
         // mining while full yields no resources and wastes http calls.
         if (isShipCargoHoldFull(cargo)){
-            log("WARN", ship_symbol + " | Cargo full, best not to break the mining heads for nothing, boss.");
+            log("WARN", ship_symbol + " | Cargo full, best not break the mining heads for nothing, boss.");
             return;
         }
 
@@ -1060,14 +1066,19 @@ void applyRoleMiner(const json &ship_json){
         const json result = extractResourcesWithSurvey(ship_symbol, best_survey);
         const string extracted_resource_symbol = result["extraction"]["yield"]["symbol"];
         const int extracted_resource_units = result["extraction"]["yield"]["units"];
+        json cargo = result["cargo"];
                 
         // immidiately jettison anything which is not on the resource_keep_list
         if (!isItemWorthKeeping(extracted_resource_symbol)){
             jettisonCargo(ship_symbol, extracted_resource_symbol, extracted_resource_units);
-        }
-
-        // another transfer cargo here could potentially save the transport a turn if the mined yield would fill the transport.
-
+        //} else {
+            // if theres a transport nearby, we can save a turn by transferring it immidiately.
+			//if (transport_is_on_site){
+            //	const json transfer_result = transferAllCargo(ship_symbol, transport_ship_symbol, cargo);
+            //    cargo = transfer_result["data"]["cargo"];
+            //    report_cargo(cargo);
+			//}
+		}
     }
 }
 
@@ -1255,26 +1266,26 @@ void shipRoleApplicator(const json &ship_json){
         const string ship_symbol = ship_json["symbol"];
 
         if (role == "COMMAND"){
-            log("INFO", ship_symbol + " | ROLE: " + role);
+            log("INFO", ship_symbol + " | " + role);
             commandShipRoleDecider(ship_json);
             return;
         }
         if (role == "SATELLITE"){
-            log("INFO", ship_symbol + " | ROLE: " + role);
+            log("INFO", ship_symbol + " | " + role);
             applyRoleSatellite(ship_json);
             return;
         }
         if (role == "EXCAVATOR"){
-			log("INFO", ship_symbol + " | ROLE: " + role);
+			log("INFO", ship_symbol + " | " + role);
             applyRoleMiner(ship_json);
             return;
         }
         if (role == "SURVEYOR"){
-			log("INFO", ship_symbol + " | ROLE: " + role);
+			log("INFO", ship_symbol + " | " + role);
             applyRoleSurveyor(ship_json);
         }
         if (role == "TRANSPORT"){
-			log("INFO", ship_symbol + " | ROLE: " + role);
+			log("INFO", ship_symbol + " | " + role);
             applyRoleTransport(ship_json);
         }
     }
