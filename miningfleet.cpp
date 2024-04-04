@@ -589,23 +589,34 @@ bool isSurveyExpired(const json survey){
     return (seconds_until_expiry <= 30 ? true : false);
 }
 
-
-void updateBestSurvey(){
-    log("DEBUG", "updateBestSurvey");
-    //cout << "[DEBUG] surveys.size() " << surveys.size() << endl;
+void promoteBestSurveyForTargetFarming(){
+    log("DEBUG", "promoteBestSurveyForTargetFarming");
 
     for (survey item: surveys){
         if (item.targetResourcePercentage > best_survey_score){
             best_survey_score = item.targetResourcePercentage;
             best_survey = item.surveyObject;
             log("INFO", "New best survey. Score = " + to_string(best_survey_score));
-            printJson(best_survey);
         }
     }
 }
 
+void promoteBestSurveyForProfitability(){
+	log("DEBUG", "promoteBestSurveyForProfitability");
+
+	for (survey item: surveys){
+		if (item.marketValue > best_survey_score){
+			best_survey_score = item.marketValue;
+			best_survey = item.surveyObject;
+			log("INFO", "New best survey. Score = " + to_string(best_survey_score));
+			printJson(best_survey);
+		}
+	}
+}
+
 int priceCheck(const string good_to_check){
-    log("DEBUG", "priceCheck");
+
+    //log("DEBUG", "priceCheck " + good_to_check);
 
     // market data will only be available after the transport has delivered/sold at least once.
     if (market_data.is_null()){
@@ -616,16 +627,16 @@ int priceCheck(const string good_to_check){
     json trade_goods = market_data["tradeGoods"];
     for (json market_good: trade_goods){
         if (good_to_check == market_good["symbol"]){ 
+            //log("DEBUG", to_string(market_good["sellPrice"]));
             return market_good["sellPrice"];
         }
     }
-    cout << "[WARN] priceCheck good not found in market data. But market data exists. This shouldnt happen. Returning 0" << endl;
     return 0;
 }
 
 void scoreSurveysForTargetFarming(const string trade_good){
 
-    //cout << "[DEBUG] scoreSurveysForTargetFarming" << endl;
+	log("DEBUG", "scoreSurveysForTargetFarming " + trade_good);
 
     int index = 0;
     for (survey item: surveys){
@@ -652,19 +663,35 @@ void scoreSurveysForTargetFarming(const string trade_good){
 }
 
 void scoreSurveysForProfitability(){
-    cout << "[DEBUG] scoreSurveysForProfitability" << endl;
+
+	log("DEBUG", "scoreSurveysForProfitability");
+
+	if (market_data.is_null()){
+		log("ERROR", "market_data is null");
+	}
+
+	int index = 0;
     for (survey item: surveys){
-        int market_value = 0;
+        int sum_of_deposit_prices = 0;
         json survey_object = item.surveyObject;
         json deposits = survey_object["deposits"];
+        int number_of_deposits = deposits.size();
         for (json deposit: deposits){
             string deposit_symbol = deposit["symbol"];
             int value = priceCheck(deposit_symbol);
-            market_value = market_value + value;
-            item.marketValue = value;
+			sum_of_deposit_prices = sum_of_deposit_prices + value;
         }
-        cout << "[INFO] survey market_value: " << market_value << endl;
+
+		int value_average = sum_of_deposit_prices / number_of_deposits;
+
+		surveys.at(index).marketValue = value_average;
+		index++;
     } 
+}
+
+void resetBestSurvey(){
+	best_survey_score = 0.0;
+	best_survey = {};
 }
 
 void removeExpiredSurveys(){
@@ -676,7 +703,11 @@ void removeExpiredSurveys(){
         if (isSurveyExpired(each_survey_object)){
             log("INFO", "Erasing expired survey");
             surveys.erase(surveys.begin() + vector_index);
-            //cout << "[DEBUG] after surveys.erase" << endl;
+            if (each_survey_object == best_survey){
+            	log("INFO", "Best survey erased! Updating best survey...");
+				resetBestSurvey();
+            }
+          
         } else {
             vector_index++;
         }
@@ -709,11 +740,12 @@ void applyRoleSurveyor(const json &ship_json){
         createSurvey(ship_symbol);
 
         scoreSurveysForTargetFarming(target_resource);
-        // if we have market data, score the surveys by value
-       
-        // rename this function and have it part of the above if
-        updateBestSurvey();
 
+        // if we have market data, score the surveys by value
+		if (!market_data.is_null()){
+			scoreSurveysForProfitability();
+		}
+       
     } else {
         if (isShipDocked(ship_json)){
             orbitShip(ship_symbol);
@@ -909,6 +941,8 @@ void transferAllCargo(const json &source_ship_json, const string destination_shi
 }
 
 void updateMarketData(){
+    log("INFO", "updatMarketData");
+
     const json result = getMarket(system_symbol, delivery_waypoint_symbol);
     market_data = result["data"];
 }
@@ -988,7 +1022,13 @@ void applyRoleMiner(const json &ship_json){
         }
 
         removeExpiredSurveys();
-        updateBestSurvey();
+
+		if (isContractFulfilled(target_contract) && !market_data.is_null()){
+            promoteBestSurveyForProfitability();
+		} else {
+			// by default we farm for target_resource
+        	promoteBestSurveyForTargetFarming();
+		}
 
         // if there is no survey, we may as well wait.
         if (best_survey.is_null()){
@@ -1006,6 +1046,8 @@ void applyRoleMiner(const json &ship_json){
         if (!isItemWorthKeeping(extracted_resource_symbol)){
             jettisonCargo(ship_symbol, extracted_resource_symbol, extracted_resource_units);
         }
+
+        // another transfer cargo here could potentially save the transport a turn if the mined yield would fill the transport.
 
     }
 }
@@ -1089,6 +1131,7 @@ void applyRoleTransport(const json &ship_json){
 
     // mining ships need some way to know if the transport is present at the same waypoint.
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
+        log("INFO", "Transport on site, boss.");
         transport_is_on_site = true; 
     } else {
         transport_is_on_site = false;
@@ -1096,7 +1139,7 @@ void applyRoleTransport(const json &ship_json){
 
     // once full, leave the asteroid belt and head to the marketplace
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol) && isShipCargoHoldFull(ship_json)){
-        cout << "[INFO] " << ship_symbol << " full. Heading to delivery waypoint" << endl;
+        log("INFO", ship_symbol + " full. Heading to delivery waypoint.");
         navigateShip(ship_symbol, delivery_waypoint_symbol);
         transport_is_on_site = false;
         return;
@@ -1112,6 +1155,7 @@ void applyRoleTransport(const json &ship_json){
             }
             refuelShip(ship_symbol);
             updateMarketData();
+			scoreSurveysForProfitability();
             if (!isContractFulfilled(target_contract)){
                 // until the contract is complete, we prioritize delivering its goods.
                 // and only sell whats left
@@ -1152,7 +1196,7 @@ void applyRoleTransport(const json &ship_json){
                 return;
             }
         } 
-    }
+	}
     // catch all. if the ship is somewhere other than asteroid belt or marketplace, move it to the asteroid belt.
     if (!isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         if (isShipDocked(ship_json)){
