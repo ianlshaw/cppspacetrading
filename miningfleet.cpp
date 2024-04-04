@@ -456,13 +456,13 @@ bool isShipDocked(const json &ship_json){
 bool isShipInTransit(const json &ship_json){
     //log("DEBUG", "isShipInTransit");
     if (!ship_json["nav"]["status"].is_string()) { 
-        cout << "[ERROR] isShipInTransit ship_json['nav']['status'] is not a string" << endl;
+        log("ERROR", "isShipInTransit ship_json['nav']['status'] is not a string");
         return false;
     }
     const string status = ship_json["nav"]["status"];
     if (status == "IN_TRANSIT"){
         const string ship_symbol = ship_json["symbol"];
-		log("WARN", ship_symbol + " " + status); 
+		log("INFO", ship_symbol + " | " + status); 
     	return true;
     } 
 	return false;
@@ -481,14 +481,14 @@ void orbitShip(const string ship_symbol){
     //cout << "[DEBUG] orbitShip " << ship_symbol << endl;
     const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/orbit");
     const string status = result["data"]["nav"]["status"];
-    log("INFO", ship_symbol + " " + status);
+    log("INFO", status);
 }
 
 void dockShip(const string ship_symbol){
     //cout << "[DEBUG] dockShip " + ship_symbol << endl;
     const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/dock");
     const string status = result["data"]["nav"]["status"];
-    log("INFO", ship_symbol + " " + status);
+    log("INFO", status);
 }
 
 void navigateShip(const string ship_symbol, const string waypoint_symbol){
@@ -500,12 +500,14 @@ void navigateShip(const string ship_symbol, const string waypoint_symbol){
     const string status = nav["status"];
     const string origin_symbol = nav["route"]["origin"]["symbol"];
     const string destination_symbol = nav["route"]["destination"]["symbol"];
-    log("INFO", ship_symbol + " " + status + " from " + origin_symbol + " to " + destination_symbol);
+    log("INFO",  status + " from " + origin_symbol + " to " + destination_symbol);
 }
 
 void createSurvey(const string ship_symbol){
-    log("DEBUG", "createSurvey");
+    //log("DEBUG", "createSurvey");
     json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/survey");
+
+	log("INFO", "createSurvey");
     
     for (json each_survey: result["data"]["surveys"]){
         survey a_survey;
@@ -520,24 +522,24 @@ bool isSurveyGoodEnough(){
     return (best_survey_score >= survey_score_threshold ? true : false);
 }
 
-bool isShipCargoHoldFull(const json &ship_json){
-    if (!ship_json["cargo"]["units"].is_number_integer()){
-        cout << "[ERROR] isShipCargoHoldFull ship_json['cargo']['units'] not integer" << endl;
+bool isShipCargoHoldFull(const json &cargo){
+    if (!cargo["units"].is_number_integer()){
+		log("ERROR", "isShipCargoHoldFull cargo['units'] not integer");
         return false;
     }
-    if (!ship_json["cargo"]["capacity"].is_number_integer()){
-         cout << "[ERROR] isShipCargoHoldFull ship_json['cargo']['capacity'] not integer" << endl;
-         return false;
+    if (!cargo["capacity"].is_number_integer()){
+		log("ERROR", "isShipCargoHoldFull cargo['capacity'] not integer");
+        return false;
     }
-    return (ship_json["cargo"]["units"] == ship_json["cargo"]["capacity"] ? true : false);
+    return (cargo["units"] == cargo["capacity"] ? true : false);
 }
 
-bool isShipCargoHoldEmpty(const json &ship_json){
-    if (!ship_json["cargo"]["units"].is_number_integer()){
-        cout << "[ERROR] isShipCargoHoldEmpty ship_json['cargo']['units'] not integer" << endl;
+bool isShipCargoHoldEmpty(const json &cargo){
+    if (!cargo["units"].is_number_integer()){
+		log("ERROR", "isShipCargoHoldEmpty cargo['units'] not integer");
         return false;
     }
-    return (ship_json["cargo"]["units"] == 0 ? true : false);
+    return (cargo["units"] == 0 ? true : false);
 }
 
 bool isShipAtWaypoint(const json &ship_json, string waypoint_symbol){
@@ -609,7 +611,6 @@ void promoteBestSurveyForProfitability(){
 			best_survey_score = item.marketValue;
 			best_survey = item.surveyObject;
 			log("INFO", "New best survey. Score = " + to_string(best_survey_score));
-			printJson(best_survey);
 		}
 	}
 }
@@ -714,45 +715,18 @@ void removeExpiredSurveys(){
     }
 }
 
-
-// ships with this role should go to the asteroid belt and survey for the contract's target resource over and over.
-void applyRoleSurveyor(const json &ship_json){
-    //cout << "[DEBUG] applyRoleSurveyor" << endl;
-
-    if (!ship_json["symbol"].is_string()){
-        cout << "[ERROR] applyRoleSurveyor ship_json['symbol'] not a string" << endl;
-        return;
+// until this is true, we do not want to sell the target_resource
+bool isContractFulfilled(const json &contract_json){
+    //cout << "[DEBUG] isContractFulfilled" << endl;
+    if (contract_json["fulfilled"].is_boolean()){
+        return contract_json["fulfilled"];
     }
-
-    const string ship_symbol = ship_json["symbol"];
-
-    // if ship is currently travelling, dont waste any further cycles.
-    if (isShipInTransit(ship_json)){
-        return;
-    }
-
-    //cout << "[DEBUG] ship_symbol = " << ship_symbol << endl;
-
-    if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
-        // TODO: move this into isShipAtWaypoint
-        log("INFO", ship_symbol + " is already at " + asteroid_belt_symbol);
-
-        createSurvey(ship_symbol);
-
-        scoreSurveysForTargetFarming(target_resource);
-
-        // if we have market data, score the surveys by value
-		if (!market_data.is_null()){
-			scoreSurveysForProfitability();
-		}
-       
-    } else {
-        if (isShipDocked(ship_json)){
-            orbitShip(ship_symbol);
-        }
-        navigateShip(ship_symbol, asteroid_belt_symbol);
-    }
+    log("ERROR", "isContractFulfilled json null");
+    return false;
 }
+
+
+
 
 // useless goods can be obtained through mining, this method is used to decide what gets "spaced"
 bool isItemWorthKeeping(const string item){
@@ -799,7 +773,7 @@ void refuelShip(const string ship_symbol){
     //cout << "[DEBUG] refuelShip " + ship_symbol << endl;
     const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/refuel");
     const json transaction = result["data"]["transaction"];
-    log("INFO", ship_symbol + " refuelled costing " + to_string(transaction["totalPrice"]));
+    log("INFO", "Refuelled costing " + to_string(transaction["totalPrice"]));
 }
 
 int cargoCount(const json inventory, const string cargo_symbol){
@@ -845,36 +819,12 @@ json deliverCargoToContract(const string contract_id, const string ship_symbol, 
     int units_fulfilled = result["data"]["contract"]["terms"]["deliver"][0]["unitsFulfilled"];
     int units_required = result["data"]["contract"]["terms"]["deliver"][0]["unitsRequired"];
 
-    log("INFO", ship_symbol + " Delivered " + to_string(units) + " of " + trade_symbol + " [" + to_string(units_fulfilled) + "/" +
+    log("INFO", "Delivered " + to_string(units) + " of " + trade_symbol + " [" + to_string(units_fulfilled) + "/" +
     to_string(units_required) + "]");
 
     return result["data"];
 }
 
-// until this is true, we do not want to sell the target_resource
-bool isContractFulfilled(const json &contract_json){
-    //cout << "[DEBUG] isContractFulfilled" << endl;
-    if (contract_json["fulfilled"].is_boolean()){
-        return contract_json["fulfilled"];
-    }
-    log("ERROR", "isContractFulfilled json null");
-    return false;
-}
-
-// only once this is true should we attempt to fulfill the contract
-bool areContractRequirementsMet(const json contract_json){
-    //cout << "[DEBUG] areContractRequirementsMet" << endl;
-    //printJson(contract_json);
-    if (contract_json["terms"]["deliver"][0]["unitsFulfilled"].is_number_integer() &&
-        contract_json["terms"]["deliver"][0]["unitsRequired"].is_number_integer()){
-            const int units_fulfilled = contract_json["terms"]["deliver"][0]["unitsFulfilled"];
-            const int units_required = contract_json["terms"]["deliver"][0]["unitsRequired"];
-            return (units_fulfilled == units_required ? true : false);
-    } else {
-        log("ERROR", "areContractRequirementsMet json null");
-        return false;
-    }
-}
 
 void sellCargo(const string ship_symbol, const string cargo_symbol, const int units){
     //cout << "[DEBUG] sellCargo " << ship_symbol << " " << cargo_symbol << " " << units << endl;
@@ -887,7 +837,7 @@ void sellCargo(const string ship_symbol, const string cargo_symbol, const int un
     const string trade_symbol = transaction["tradeSymbol"];
     const int total_price = transaction["totalPrice"];
 
-    log("INFO", ship_symbol + " Sold " + to_string(units_sold) + " " + trade_symbol + " for " + to_string(total_price));
+    log("INFO", "Sold " + to_string(units_sold) + " " + trade_symbol + " for " + to_string(total_price));
 
     const int new_balance = result["data"]["agent"]["credits"];
     update_credits(new_balance);
@@ -916,7 +866,7 @@ json transferCargo(const string source_ship_symbol, const string destination_shi
     return result;
 }
 
-void transferAllCargo(const json &source_ship_json, const string destination_ship_symbol){
+json transferAllCargo(const json &source_ship_json, const string destination_ship_symbol){
     log("DEBUG", "transferAllCargo");
 
     const string source_ship_symbol = source_ship_json["symbol"];
@@ -933,15 +883,16 @@ void transferAllCargo(const json &source_ship_json, const string destination_shi
                 const int cargo_capacity = result["error"]["data"]["cargoCapacity"];
                 const int cargo_units = result["error"]["data"]["cargoUnits"];
                 const int remaining_space = cargo_capacity - cargo_units;
-                transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, remaining_space);
-                return;
+                json final_result = transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, remaining_space);
+                return final_result;
             }
         }
     }
+	return error_json;
 }
 
 void updateMarketData(){
-    log("INFO", "updatMarketData");
+    log("INFO", "updateMarketData");
 
     const json result = getMarket(system_symbol, delivery_waypoint_symbol);
     market_data = result["data"];
@@ -973,7 +924,72 @@ int countShipsByRole(const json &ship_list, const string role){
     return count;
 }
 
+
+// only once this is true should we attempt to fulfill the contract
+bool areContractRequirementsMet(const json contract_json){
+    //cout << "[DEBUG] areContractRequirementsMet" << endl;
+    //printJson(contract_json);
+    if (contract_json["terms"]["deliver"][0]["unitsFulfilled"].is_number_integer() &&
+        contract_json["terms"]["deliver"][0]["unitsRequired"].is_number_integer()){
+            const int units_fulfilled = contract_json["terms"]["deliver"][0]["unitsFulfilled"];
+            const int units_required = contract_json["terms"]["deliver"][0]["unitsRequired"];
+            return (units_fulfilled == units_required ? true : false);
+    } else {
+        log("ERROR", "areContractRequirementsMet json null");
+        return false;
+    }
+}
+
+
 // ROLES
+
+// ships with this role should go to the asteroid belt and survey for the contract's target resource over and over.
+void applyRoleSurveyor(const json &ship_json){
+    //cout << "[DEBUG] applyRoleSurveyor" << endl;
+
+    if (!ship_json["symbol"].is_string()){
+        cout << "[ERROR] applyRoleSurveyor ship_json['symbol'] not a string" << endl;
+        return;
+    }
+
+    const string ship_symbol = ship_json["symbol"];
+
+    // if ship is currently travelling, dont waste any further cycles.
+    if (isShipInTransit(ship_json)){
+        return;
+    }
+
+    //cout << "[DEBUG] ship_symbol = " << ship_symbol << endl;
+
+    if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
+        // TODO: move this into isShipAtWaypoint
+        log("INFO", "Already at " + asteroid_belt_symbol);
+
+        createSurvey(ship_symbol);
+
+        scoreSurveysForTargetFarming(target_resource);
+
+        // if we have market data, score the surveys by value
+		if (!market_data.is_null()){
+			scoreSurveysForProfitability();
+		}
+
+		if (isContractFulfilled(target_contract) && !market_data.is_null()){
+            promoteBestSurveyForProfitability();
+		} else {
+			// by default we farm for target_resource
+        	promoteBestSurveyForTargetFarming();
+		}
+
+       
+    } else {
+        if (isShipDocked(ship_json)){
+            orbitShip(ship_symbol);
+        }
+        navigateShip(ship_symbol, asteroid_belt_symbol);
+    }
+}
+
 
 // mining ships should go to the asteroid belt and mine until full
 // then they should head to the marketplace, deliver contract goods sell everything else
@@ -987,6 +1003,8 @@ void applyRoleMiner(const json &ship_json){
     }
 
     const string ship_symbol = ship_json["symbol"];
+
+    json cargo = ship_json["cargo"];
 
     //cout << "[DEBUG] " << ship_symbol << " applyRoleMiner" << endl;
 
@@ -1007,17 +1025,18 @@ void applyRoleMiner(const json &ship_json){
     // ship is at asteroid belt.
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         // make space for current mining cycle.
-        if (!isShipCargoHoldEmpty(ship_json)){
+        if (!isShipCargoHoldEmpty(cargo)){
             // is transport ship on site?
             if (transport_is_on_site){
-                transferAllCargo(ship_json, transport_ship_symbol);
+                const json transfer_result = transferAllCargo(ship_json, transport_ship_symbol);
+                cargo = transfer_result["cargo"];
+                report_cargo(cargo);
             }
         }
 
-
         // mining while full yields no resources and wastes http calls.
-        if (isShipCargoHoldFull(ship_json)){
-            log("WARN", "Cargo full, best not to break the mining heads for nothing, boss.");
+        if (isShipCargoHoldFull(cargo)){
+            log("WARN", ship_symbol + " | Cargo full, best not to break the mining heads for nothing, boss.");
             return;
         }
 
@@ -1138,8 +1157,8 @@ void applyRoleTransport(const json &ship_json){
     }
 
     // once full, leave the asteroid belt and head to the marketplace
-    if (isShipAtWaypoint(ship_json, asteroid_belt_symbol) && isShipCargoHoldFull(ship_json)){
-        log("INFO", ship_symbol + " full. Heading to delivery waypoint.");
+    if (isShipAtWaypoint(ship_json, asteroid_belt_symbol) && isShipCargoHoldFull(cargo)){
+        log("INFO", "Cargo full. Heading to delivery waypoint.");
         navigateShip(ship_symbol, delivery_waypoint_symbol);
         transport_is_on_site = false;
         return;
@@ -1148,7 +1167,7 @@ void applyRoleTransport(const json &ship_json){
     // ship is at the delivery waypoint
     if (isShipAtWaypoint(ship_json, delivery_waypoint_symbol)){
         // we have something to hand in or sell
-        if (!isShipCargoHoldEmpty(ship_json)){
+        if (!isShipCargoHoldEmpty(cargo)){
             // dock if we arent already
             if (!isShipDocked(ship_json)){
                 dockShip(ship_symbol); 
@@ -1214,13 +1233,13 @@ void commandShipRoleDecider(const json &ship_json){
 
     // do we have a good survey?
     if (isSurveyGoodEnough()){
-		log("INFO", "Survey is good enough " + ship_symbol + " will mine.");
+		log("INFO", "Survey is good enough. Mining...");
         // then lets mine.
         applyRoleMiner(ship_json);
 
     } else {
     // survey is not good enough. command frigate should survey.
-        log("INFO", "Survey is not good enough " + ship_symbol + " will survey");
+        log("INFO", "Survey is not good enough. Surveying...");
         applyRoleSurveyor(ship_json);
     }
 }
@@ -1236,26 +1255,26 @@ void shipRoleApplicator(const json &ship_json){
         const string ship_symbol = ship_json["symbol"];
 
         if (role == "COMMAND"){
-            log("INFO", ship_symbol + " Role identified as: " + role);
+            log("INFO", ship_symbol + " | ROLE: " + role);
             commandShipRoleDecider(ship_json);
             return;
         }
         if (role == "SATELLITE"){
-            log("INFO", ship_symbol + " Role identified as: " + role);
+            log("INFO", ship_symbol + " | ROLE: " + role);
             applyRoleSatellite(ship_json);
             return;
         }
         if (role == "EXCAVATOR"){
-			log("INFO", ship_symbol + " Role identified as: " + role);
+			log("INFO", ship_symbol + " | ROLE: " + role);
             applyRoleMiner(ship_json);
             return;
         }
         if (role == "SURVEYOR"){
-			log("INFO", ship_symbol + " Role identified as: " + role);
+			log("INFO", ship_symbol + " | ROLE: " + role);
             applyRoleSurveyor(ship_json);
         }
         if (role == "TRANSPORT"){
-			log("INFO", ship_symbol + " Role identified as: " + role);
+			log("INFO", ship_symbol + " | ROLE: " + role);
             applyRoleTransport(ship_json);
         }
     }
