@@ -912,7 +912,8 @@ json transferAllCargo(const string source_ship_symbol, const string destination_
 			return source_cargo_after_transfer;
 		}
 		if (units < destination_remaining_space){
-        	transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, units);
+        	const json transfer_result = transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, units);
+			source_cargo_after_transfer = transfer_result["data"]["cargo"];
 			destination_remaining_space = destination_remaining_space - units;
 		}
     }
@@ -1075,7 +1076,6 @@ void applyRoleMiner(const json &ship_json){
 
         // if there is no survey, we may as well wait.
         if (best_survey.is_null()){
-            cout << "[WARN] No survey no point, boss." << endl;
             log("WARN", "No survey no point, boss.");
             return;
         }
