@@ -506,6 +506,7 @@ void navigateShip(const string ship_symbol, const string waypoint_symbol){
 
 void createSurvey(const string ship_symbol){
     //log("DEBUG", "createSurvey");
+
     json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/survey");
 
 	log("INFO", "createSurvey");
@@ -593,7 +594,7 @@ bool isSurveyExpired(const json survey){
 }
 
 void promoteBestSurveyForTargetFarming(){
-    log("DEBUG", "promoteBestSurveyForTargetFarming");
+    //log("DEBUG", "promoteBestSurveyForTargetFarming");
 
     for (survey item: surveys){
         if (item.targetResourcePercentage > best_survey_score){
@@ -605,7 +606,7 @@ void promoteBestSurveyForTargetFarming(){
 }
 
 void promoteBestSurveyForProfitability(){
-	log("DEBUG", "promoteBestSurveyForProfitability");
+	//log("DEBUG", "promoteBestSurveyForProfitability");
 
 	for (survey item: surveys){
 		if (item.marketValue > best_survey_score){
@@ -638,7 +639,7 @@ int priceCheck(const string good_to_check){
 
 void scoreSurveysForTargetFarming(const string trade_good){
 
-	log("DEBUG", "scoreSurveysForTargetFarming " + trade_good);
+	//log("DEBUG", "scoreSurveysForTargetFarming " + trade_good);
 
     int index = 0;
     for (survey item: surveys){
@@ -666,7 +667,7 @@ void scoreSurveysForTargetFarming(const string trade_good){
 
 void scoreSurveysForProfitability(){
 
-	log("DEBUG", "scoreSurveysForProfitability");
+	//log("DEBUG", "scoreSurveysForProfitability");
 
 	if (market_data.is_null()){
 		log("ERROR", "market_data is null");
@@ -758,7 +759,9 @@ void jettisonCargo(const string ship_symbol, const string cargo_symbol, const in
 
 
 json extractResourcesWithSurvey(const string ship_symbol, const json target_survey){
-    log("DEBUG", "extractResourcesWithSurvey");
+
+    //log("DEBUG", "extractResourcesWithSurvey");
+
     const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/extract/survey", target_survey);
     const string extracted_resource_symbol = result["data"]["extraction"]["yield"]["symbol"];
     const int extracted_resource_units = result["data"]["extraction"]["yield"]["units"];
@@ -787,6 +790,12 @@ int cargoCount(const json inventory, const string cargo_symbol){
         }
     }
     return 0;
+}
+
+int cargoRemaining(const json &cargo){
+	const int units = cargo["units"];
+	const int capacity = cargo["capacity"];
+    return capacity - units;
 }
 
 json fulfillContract(const string contract_id){
@@ -860,40 +869,55 @@ void purchaseShip(const string ship_type, const string waypoint_symbol){
 
 json transferCargo(const string source_ship_symbol, const string destination_ship_symbol, const string trade_symbol, const int units){
 
-	log("DEBUG", "transferCargo " + source_ship_symbol + " " + destination_ship_symbol + " " + trade_symbol + " " + to_string(units));
+	log("INFO", "transferCargo " + source_ship_symbol + " " + destination_ship_symbol + " " + trade_symbol + " " + to_string(units));
 
     json payload;
     payload["tradeSymbol"] = trade_symbol;
     payload["units"] = units;
     payload["shipSymbol"] = destination_ship_symbol;
     const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + source_ship_symbol + "/transfer", payload);
+    const json cargo = result["data"]["cargo"];
+    report_cargo(cargo);
     return result;
 }
 
 json transferAllCargo(const string source_ship_symbol, const string destination_ship_symbol, const json &source_ship_cargo){
-    log("DEBUG", "transferAllCargo");
+    //log("DEBUG", "transferAllCargo");
 
-    json result;
+    const json destination_ship_json = getShip(destination_ship_symbol);
+	const json destination_ship_cargo = destination_ship_json["cargo"];
+	int destination_remaining_space = cargoRemaining(destination_ship_cargo);
+
+	if (destination_remaining_space == 0){
+		log("INFO", "Transport is already full, boss.");
+		return source_ship_cargo;
+	}
 
     const json inventory = source_ship_cargo["inventory"];
+	json source_cargo_after_transfer;
+
     for (json item: inventory){
         const string trade_symbol = item["symbol"];
         const int units = item["units"];
-        result = transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, units);
-        if (result.contains("error")){
-			log("DEBUG", "transferAllCargo result contains error");
-            const int error_code = result["error"]["code"];
-            if (error_code == 4217){
-				log("WARN", "error code 4217 found");
-                const int cargo_capacity = result["error"]["data"]["cargoCapacity"];
-                const int cargo_units = result["error"]["data"]["cargoUnits"];
-                const int remaining_space = cargo_capacity - cargo_units;
-                const json result_after_failure = transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, remaining_space);
-				return result_after_failure;
-            }
-        }
+		if (units == destination_remaining_space){
+			log("INFO", "TRANSPORT Full");
+			const json transfer_result = transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, units);
+			source_cargo_after_transfer = transfer_result["data"]["cargo"];
+			return source_cargo_after_transfer;
+		}
+		if (units > destination_remaining_space){
+			log("INFO", "TRANSPORT only has " + to_string(destination_remaining_space) + " space remaining, boss.");
+			const json transfer_result = transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, destination_remaining_space);
+            source_cargo_after_transfer = transfer_result["data"]["cargo"];
+			return source_cargo_after_transfer;
+		}
+		if (units < destination_remaining_space){
+        	transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, units);
+			destination_remaining_space = destination_remaining_space - units;
+		}
     }
-	return result;
+	log("INFO", "Emptied hold to TRANSPORT. Ready to mine, boss.");
+	return source_cargo_after_transfer;
 }
 
 void updateMarketData(){
@@ -901,11 +925,6 @@ void updateMarketData(){
 
     const json result = getMarket(system_symbol, delivery_waypoint_symbol);
     market_data = result["data"];
-}
-
-// this function should identify ships with role transport as well as check if they are on site at asteroid field and have cargo cap
-string getAvailableTransport(){
-    return "a string";
 }
 
 string getTransportShipSymbol(const json &ship_list){
@@ -1035,8 +1054,7 @@ void applyRoleMiner(const json &ship_json){
             if (transport_is_on_site){
 				log("INFO", "Transport is on site. Attempting transfer...");
                 const json transfer_result = transferAllCargo(ship_symbol, transport_ship_symbol, cargo);
-                cargo = transfer_result["data"]["cargo"];
-                report_cargo(cargo);
+				cargo = transfer_result;
             }
         }
 
@@ -1071,13 +1089,11 @@ void applyRoleMiner(const json &ship_json){
         // immidiately jettison anything which is not on the resource_keep_list
         if (!isItemWorthKeeping(extracted_resource_symbol)){
             jettisonCargo(ship_symbol, extracted_resource_symbol, extracted_resource_units);
-        //} else {
+        } else {
             // if theres a transport nearby, we can save a turn by transferring it immidiately.
-			//if (transport_is_on_site){
-            //	const json transfer_result = transferAllCargo(ship_symbol, transport_ship_symbol, cargo);
-            //    cargo = transfer_result["data"]["cargo"];
-            //    report_cargo(cargo);
-			//}
+			if (transport_is_on_site){
+            	 transferAllCargo(ship_symbol, transport_ship_symbol, cargo);
+			}
 		}
     }
 }
@@ -1169,7 +1185,7 @@ void applyRoleTransport(const json &ship_json){
 
     // once full, leave the asteroid belt and head to the marketplace
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol) && isShipCargoHoldFull(cargo)){
-        log("INFO", "Cargo full. Heading to delivery waypoint.");
+        log("INFO", "Cargo full. Heading to market, boss.");
         navigateShip(ship_symbol, delivery_waypoint_symbol);
         transport_is_on_site = false;
         return;
