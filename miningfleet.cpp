@@ -22,7 +22,7 @@ const int max_retries = 5;
 const int retry_delay = 30;
 const int turn_length = 120;
 
-const int desired_number_of_surveyor_ships = 1;
+const int desired_number_of_surveyor_ships = 5;
 const int desired_number_of_mining_ships = 1;
 const int desired_number_of_shuttle_ships = 1;
 
@@ -319,6 +319,10 @@ void registerAgent(const string callsign, const string faction) {
     writeAuthTokenToFile(result["data"]["token"]);
 }
 
+json getAgent(){
+	return(http_get("https://api.spacetraders.io/v2/my/agent"));
+}
+
 json listShips(){
     const json result = http_get("https://api.spacetraders.io/v2/my/ships");
     return result["data"];
@@ -357,7 +361,7 @@ void acceptContract(const string contractId) {
 bool hasContractBeenAccepted(const json contract_json){
     if (contract_json["accepted"].is_boolean()){
         return contract_json["accepted"];
-    }
+    } 
     return false;
 }
 
@@ -407,6 +411,32 @@ string findShipyardByShipType(const string ship_type){
         }
     }
     return "ERROR findShipyardByShipType";
+}
+
+int howMuchDoesShipCost(const string ship_type, const string shipyard_waypoint_symbol){
+	const json get_shipyard_result = getShipyard(system_symbol, shipyard_waypoint_symbol);
+	json ships = get_shipyard_result["ships"];
+	for(json ship: ships){
+		if (ship_type == ship["type"]){
+			return ship["purchasePrice"];
+		}
+	}
+	log("ERROR", "howMuchDoesShipCost ship not found. Returning some insane cost to force haveEnoughCredits to return false");
+	return 10000000;
+}
+
+bool isShipAffordable(const string ship_type, const string shipyard_symbol){
+	// can i afford SHIP SURVEYOR from surveyor_ship_shipyard_symbol
+	const json agent = getAgent();
+	update_credits(agent["data"]["credits"]);
+	
+	int ship_price = howMuchDoesShipCost(ship_type, shipyard_symbol);
+	
+	if (haveEnoughCredits(ship_price)){
+	    return true;
+	}  
+	log("WARN", "Cannot afford to purchase " + ship_type + " from " + shipyard_symbol + " you are too poor, boss.");
+	return false;
 }
 
 json getMarket(const string system_symbol, const string waypoint_symbol){
@@ -1112,7 +1142,11 @@ void applyRoleSatellite(const json &ship_json){
             if (!isShipDocked(ship_json)){
                 dockShip(ship_symbol);
             } 
-            purchaseShip("SHIP_SURVEYOR", surveyor_ship_shipyard_symbol);
+
+			if (isShipAffordable("SHIP_SURVEYOR", surveyor_ship_shipyard_symbol)){
+            	purchaseShip("SHIP_SURVEYOR", surveyor_ship_shipyard_symbol);
+			}
+
         } else {
             if (isShipDocked(ship_json)){
                 orbitShip(ship_symbol);
@@ -1128,7 +1162,11 @@ void applyRoleSatellite(const json &ship_json){
             if (!isShipDocked(ship_json)){
                 dockShip(ship_symbol);
             }
-            purchaseShip("SHIP_LIGHT_SHUTTLE", shuttle_ship_shipyard_symbol);
+
+			if (isShipAffordable("SHIP_LIGHT_SHUTTLE", shuttle_ship_shipyard_symbol)){
+            	purchaseShip("SHIP_LIGHT_SHUTTLE", shuttle_ship_shipyard_symbol);
+			}
+
         } else {
             if (isShipDocked(ship_json)){
                 orbitShip(ship_symbol);
@@ -1145,7 +1183,11 @@ void applyRoleSatellite(const json &ship_json){
             if (!isShipDocked(ship_json)){
                 dockShip(ship_symbol);
             }
-            purchaseShip("SHIP_MINING_DRONE", mining_ship_shipyard_symbol);
+
+             if (isShipAffordable("SHIP_MINING_DRONE", mining_ship_shipyard_symbol)){
+                 purchaseShip("SHIP_MINING_DRONE", mining_ship_shipyard_symbol);
+             }
+
         } else {
             if (isShipDocked(ship_json)){
                 orbitShip(ship_symbol);
@@ -1330,7 +1372,6 @@ int main(int argc, char* argv[])
     int turn_number = 0;
 
     // AD HOC TESTING
-    //exit(0)
 
 
     // every turn...
