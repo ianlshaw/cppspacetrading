@@ -22,7 +22,7 @@ const int max_retries = 5;
 const int retry_delay = 30;
 const int turn_length = 120;
 
-const int desired_number_of_surveyor_ships = 5;
+const int desired_number_of_surveyor_ships = 1;
 const int desired_number_of_mining_ships = 1;
 const int desired_number_of_shuttle_ships = 1;
 
