@@ -775,9 +775,15 @@ void jettisonCargo(const string ship_symbol, const string cargo_symbol, const in
 
 	//log("DEBUG", "Jettisoning " + to_string(units) + " units of " + cargo_symbol);
 
+	if (units <= 0) {
+		log("WARN", "Discarding attempt to jettison 0 or less");
+		return;
+	}
+
     json payload;
     payload["symbol"] = cargo_symbol;
     payload["units"] = units;
+
 
     const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/jettison", payload);
 
