@@ -20,21 +20,19 @@ int http_calls = 0;
 
 const int max_retries = 5;
 const int retry_delay = 30;
-const int turn_length = 120;
+const int turn_length = 90;
 
-const int desired_number_of_surveyor_ships = 1;
-const int desired_number_of_mining_ships = 1;
-const int desired_number_of_shuttle_ships = 1;
+const int desired_number_of_surveyor_ships = 0;
+const int desired_number_of_mining_ships = 0;
+const int desired_number_of_shuttle_ships = 2;
 
 int number_of_surveyor_ships = 0;
 int number_of_mining_ships = 0;
 int number_of_shuttle_ships = 0;
-bool transport_is_on_site = false;
+vector <string> transports_on_site;
 
 int credits = 0;
 
-// lazy
-string transport_ship_symbol;
 
 string system_symbol;
 json contracts_list;
@@ -325,7 +323,7 @@ json getAgent(){
 
 json listShips(){
     const json result = http_get("https://api.spacetraders.io/v2/my/ships");
-    return result["data"];
+  	return result["data"];
 }
 
 json getShip(const string ship_symbol){
@@ -539,6 +537,8 @@ void createSurvey(const string ship_symbol){
 
     json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/survey");
 
+    //printJson(result);
+
 	log("INFO", "createSurvey");
     
     for (json each_survey: result["data"]["surveys"]){
@@ -725,6 +725,34 @@ void scoreSurveysForProfitability(){
 void resetBestSurvey(){
 	best_survey_score = 0.0;
 	best_survey = {};
+}
+
+bool isAtLeastOneTransportOnSite(){
+	return (transports_on_site.size() > 0 ? true : false);
+}
+
+string firstOnSiteTransport(){
+	return transports_on_site.at(0);
+}
+
+bool isTransportPresentInOnSiteVector(const string &ship_symbol){
+	for (string transport_symbol: transports_on_site){
+		if (transport_symbol == ship_symbol){
+			return true;
+		}
+	}
+	return false;
+}
+
+void removeTransportFromOnSiteVector(const string &ship_symbol){
+	log("DEBUG", "removeTransportFromOnSiteVector " + ship_symbol);
+	int vector_index = 0;
+ 	for (string transport_symbol: transports_on_site){
+		if (transport_symbol == ship_symbol){
+			transports_on_site.erase(transports_on_site.begin() + vector_index);
+			return;
+		}
+	}
 }
 
 void removeExpiredSurveys(){
@@ -1088,9 +1116,9 @@ void applyRoleMiner(const json &ship_json){
         // make space for current mining cycle.
         if (!isShipCargoHoldEmpty(cargo)){
             // is transport ship on site?
-            if (transport_is_on_site){
+            if (isAtLeastOneTransportOnSite()){
 				log("INFO", "Transport is on site. Attempting transfer...");
-                const json transfer_result = transferAllCargo(ship_symbol, transport_ship_symbol, cargo);
+                const json transfer_result = transferAllCargo(ship_symbol, firstOnSiteTransport(), cargo);
 				cargo = transfer_result;
             }
         }
@@ -1118,6 +1146,7 @@ void applyRoleMiner(const json &ship_json){
 
         // execute mining operation
         const json result = extractResourcesWithSurvey(ship_symbol, best_survey);
+        //printJson(result);
         const string extracted_resource_symbol = result["extraction"]["yield"]["symbol"];
         const int extracted_resource_units = result["extraction"]["yield"]["units"];
         json cargo = result["cargo"];
@@ -1127,8 +1156,8 @@ void applyRoleMiner(const json &ship_json){
             jettisonCargo(ship_symbol, extracted_resource_symbol, extracted_resource_units);
         } else {
             // if theres a transport nearby, we can save a turn by transferring it immidiately.
-			if (transport_is_on_site){
-            	 transferAllCargo(ship_symbol, transport_ship_symbol, cargo);
+			if (isAtLeastOneTransportOnSite()){
+            	 transferAllCargo(ship_symbol, firstOnSiteTransport(), cargo);
 			}
 		}
     }
@@ -1226,16 +1255,17 @@ void applyRoleTransport(const json &ship_json){
     // mining ships need some way to know if the transport is present at the same waypoint.
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         log("INFO", "Transport on site, boss.");
-        transport_is_on_site = true; 
-    } else {
-        transport_is_on_site = false;
-    }
+		if (!isTransportPresentInOnSiteVector(ship_symbol)){
+			transports_on_site.push_back(ship_symbol);
+			log("DEBUG", "pushing " + ship_symbol + " to transports_on_site vector:");
+		}
+	}
 
     // once full, leave the asteroid belt and head to the marketplace
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol) && isShipCargoHoldFull(cargo)){
         log("INFO", "Cargo full. Heading to market, boss.");
         navigateShip(ship_symbol, delivery_waypoint_symbol);
-        transport_is_on_site = false;
+		removeTransportFromOnSiteVector(ship_symbol);
         return;
     }
 
@@ -1394,7 +1424,6 @@ int main(int argc, char* argv[])
         number_of_mining_ships = countShipsByRole(ships, "EXCAVATOR");
         number_of_shuttle_ships = countShipsByRole(ships, "TRANSPORT");
 
-        transport_ship_symbol = getTransportShipSymbol(ships);
 
         for (json ship : ships){
             string ship_symbol = ship["symbol"];
@@ -1404,7 +1433,9 @@ int main(int argc, char* argv[])
             sleep(delay_between_ships);
         }
 
-        log("INFO", "HTTP Calls: " + to_string(http_calls));
+        int calls_per_minute = http_calls / 1.5;
+
+        log("INFO", "HTTP Calls: " + to_string(calls_per_minute) + "/m");
 
         // this is arbitary but avoids most cooldown issues, and is easier on the server.
         // eventually ships should pass their cooldown into this.
