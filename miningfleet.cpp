@@ -28,10 +28,11 @@ const int turn_length = 90;
 
 
 const int maximum_excavators = 4;
+const int maximum_shuttles = 1;
 
-int number_of_surveyor_ships = 0;
-int number_of_mining_ships = 0;
-int number_of_transport_ships = 0;
+float number_of_surveyor_ships = 0;
+float number_of_mining_ships = 0;
+float number_of_transport_ships = 0;
 
 const float desired_transport_to_miner_ratio = 0.5;
 const float desired_surveyor_to_miner_ratio = 0.3;
@@ -1460,12 +1461,13 @@ int main(int argc, char* argv[])
         int delay_between_ships = turn_length / number_of_ships;
 
         number_of_surveyor_ships = countShipsByRole(ships, "SURVEYOR");
+        number_of_transport_ships = countShipsByRole(ships, "TRANSPORT");
         number_of_mining_ships = countShipsByRole(ships, "EXCAVATOR");
 
         // COMMAND ship counts as two mining ships.
         number_of_mining_ships = number_of_mining_ships + 2;
-        number_of_transport_ships = countShipsByRole(ships, "TRANSPORT");
 
+        // these ratios are used to decide the order ships are purchased in
         transport_to_miner_ratio = number_of_transport_ships / number_of_mining_ships; 
         surveyor_to_miner_ratio = number_of_surveyor_ships / number_of_mining_ships;
 
