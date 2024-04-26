@@ -27,17 +27,18 @@ const int retry_delay = 30;
 const int turn_length = 90;
 
 
-const int maximum_excavators = 4;
+const int maximum_excavators = 10;
 const int maximum_shuttles = 1;
 
 float number_of_surveyor_ships = 0;
 float number_of_mining_ships = 0;
-float number_of_transport_ships = 0;
+float number_of_shuttles = 0;
+float number_of_haulers = 0;
 
-const float desired_transport_to_miner_ratio = 0.5;
+const float desired_hauler_to_miner_ratio = 0.08;
 const float desired_surveyor_to_miner_ratio = 0.3;
 
-float transport_to_miner_ratio = 0.0;
+float hauler_to_miner_ratio = 0.0;
 float surveyor_to_miner_ratio = 0.0;
 
 vector <string> transports_on_site;
@@ -336,12 +337,18 @@ json getAgent(){
 
 json listShips(){
     const json result = http_get("https://api.spacetraders.io/v2/my/ships");
-  	return result["data"];
+    if (result.contains("data")){
+  	    return result["data"];
+    }
+    return result;
 }
 
 json getShip(const string ship_symbol){
     const json result = http_get("https://api.spacetraders.io/v2/my/ships/" + ship_symbol);
-    return result["data"];
+    if (result.contains("data")){
+        return result["data"];
+    }
+    return result;
 }
 
 json listWaypointsInSystem(const string system_symbol){
@@ -365,7 +372,7 @@ json listContracts(){
 }
 
 void acceptContract(const string contractId) {
-    cout << "[DEBUG] Attempting to accept contract " + contractId << endl;
+    log("DEBUG", "Attempting to accept contract" + contractId);
     http_post("https://api.spacetraders.io/v2/my/contracts/" + contractId + "/accept");
 }
 
@@ -396,10 +403,12 @@ json findWaypointsByTrait(const string system_symbol, const string trait){
 
 json getShipyard(const string system_symbol, const string waypoint_symbol){
     json result = http_get("https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints/" + waypoint_symbol + "/shipyard");
-    if (result["data"].is_null()){
-        cout << "[ERROR] getShipyard['data'] is null" << endl;
+
+    // inverted to test error_json
+    if (result.contains("error")){
         return error_json;
     }
+
     return result["data"];
 }
 
@@ -421,7 +430,7 @@ string findShipyardByShipType(const string ship_type){
             }
         }
     }
-    return "ERROR findShipyardByShipType";
+    return "ERROR findShipyardByShipType no shipyard found with ship_type";
 }
 
 int howMuchDoesShipCost(const string ship_type, const string shipyard_waypoint_symbol){
@@ -476,9 +485,13 @@ void initializeGlobals(){
     asteroid_belt_symbol = findWaypointByType(system_symbol, "ENGINEERED_ASTEROID"); 
     delivery_waypoint_symbol = target_contract["terms"]["deliver"][0]["destinationSymbol"];
     surveyor_ship_shipyard_symbol = findShipyardByShipType("SHIP_SURVEYOR");
+    log("DEBUG", "surveyor_ship_shipyard_symbol = " + surveyor_ship_shipyard_symbol);
     mining_ship_shipyard_symbol = findShipyardByShipType("SHIP_MINING_DRONE");
+    log("DEBUG", "mining_ship_shipyard_symbol = " + mining_ship_shipyard_symbol);
     shuttle_ship_shipyard_symbol = findShipyardByShipType("SHIP_LIGHT_SHUTTLE");
+    log("DEBUG", "shuttle_ship_shipyard_symbol = " + shuttle_ship_shipyard_symbol);
     light_hauler_shipyard_symbol = findShipyardByShipType("SHIP_LIGHT_HAULER");
+    log("DEBUG", "light_hauler_shipyard_symbol = " + light_hauler_shipyard_symbol);
 
 
     json get_market_result = getMarket(system_symbol, delivery_waypoint_symbol);
@@ -854,6 +867,18 @@ json extractResourcesWithSurvey(const string ship_symbol, const json target_surv
     //log("DEBUG", "extractResourcesWithSurvey");
 
     const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/extract/survey", target_survey);
+
+    if (result.contains("error")){
+
+        if (result["error"]["code"] == 4224){
+            // survey exhausted, manually expire/remove it here
+            log("WARN", "Survey exhausted!");
+        }
+
+        log("ERROR", "extractResourcesWithSurvey contains error");
+        return(result);
+    }
+
     const string extracted_resource_symbol = result["data"]["extraction"]["yield"]["symbol"];
     const int extracted_resource_units = result["data"]["extraction"]["yield"]["units"];
     const json cargo = result["data"]["cargo"];
@@ -889,13 +914,21 @@ int cargoRemaining(const json &cargo){
     return capacity - units;
 }
 
-json fulfillContract(const string contract_id){
-    cout << "[DEBUG] fulfillContract" << endl;
+void fulfillContract(const string contract_id){
+    log("DEBUG", "fulfillContract");
     json result = http_post("https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/fulfill");
-    // update the global target_contract after it is fulfilled.
-    target_contract = result["data"]["contract"];
-    printJson(result);
-    return result;
+
+    if (result.contains("error")){
+        log("ERROR", "fulfillContract returned error");
+        return;
+    }
+
+    if (result.contains("contract")){
+        // update the global target_contract after it is fulfilled.
+        target_contract = result["data"]["contract"];
+    }
+
+    log("INFO", "Contract fulfilled, rejoice!");
 }
 
 json deliverCargoToContract(const string contract_id, const string ship_symbol, const string trade_symbol, const int units){
@@ -906,15 +939,18 @@ json deliverCargoToContract(const string contract_id, const string ship_symbol, 
     payload["units"] = units;
     json result = http_post("https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/deliver", payload);
 
+    if (result.contains("error")){
+        return result;
+    }
+
     if (!result["data"]["contract"]["terms"]["deliver"][0]["unitsFulfilled"].is_number_integer()){
-        cout << "[ERROR] deliverCargoToContract result['data']['contract']['terms']['deliver'][0]['unitsFulfilled'] " <<
-                "is not an integer" << endl;
-        return error_json;
+        log("ERROR", "[ERROR] deliverCargoToContract result['data']['contract']['terms']['deliver'][0]['unitsFulfilled'] is not an integer");
+        return result;
     }
 
     if (!result["data"]["contract"]["terms"]["deliver"][0]["unitsRequired"].is_number_integer()){
-        cout << "[ERROR] deliverCargoToContract result['data']['contract']['terms']['deliver'][0]['unitsRequired'] " <<
-                " is not an integer" << endl;
+        log("ERROR", "deliverCargoToContract result['data']['contract']['terms']['deliver'][0]['unitsRequired'] is not an integer");
+        return result;
     }
 
     int units_fulfilled = result["data"]["contract"]["terms"]["deliver"][0]["unitsFulfilled"];
@@ -932,7 +968,13 @@ void sellCargo(const string ship_symbol, const string cargo_symbol, const int un
     json payload;
     payload["symbol"] = cargo_symbol;
     payload["units"] = units;
+
     json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/sell", payload);
+    if (result.contains("error")){
+        log("ERROR", "sellCargo returned error");
+        return;
+    }
+
     const json transaction = result["data"]["transaction"];
     const int units_sold = transaction["units"];
     const string trade_symbol = transaction["tradeSymbol"];
@@ -950,9 +992,11 @@ void purchaseShip(const string ship_type, const string waypoint_symbol){
     payload["shipType"] = ship_type;
     payload["waypointSymbol"] = waypoint_symbol;
     const json result = http_post("https://api.spacetraders.io/v2/my/ships", payload);
-    if (result["data"].is_null()){
+    if (result.contains("error")){
+        log("ERROR", "purchaseShip returned error");
         return;
     }
+
     const int price = result["data"]["transaction"]["price"];
     const int balance = result["data"]["agent"]["credits"];
     const string role = result["data"]["ship"]["registration"]["role"];
@@ -1181,6 +1225,10 @@ void applyRoleMiner(const json &ship_json){
 
         // execute mining operation
         const json result = extractResourcesWithSurvey(ship_symbol, best_survey);
+        if (result.contains("error")){
+            log("ERROR", "extractResourcesWithSurvey returned error, skipping transfer subroutine.");
+            return;
+        }
         //printJson(result);
         const string extracted_resource_symbol = result["extraction"]["yield"]["symbol"];
         const int extracted_resource_units = result["extraction"]["yield"]["units"];
@@ -1227,7 +1275,7 @@ void applyRoleSatellite(const json &ship_json){
         }
     }
 
-    if (transport_to_miner_ratio < desired_transport_to_miner_ratio){
+    if (number_of_shuttles < maximum_shuttles){
         // buy shuttle 
         if (isShipAtWaypoint(ship_json, shuttle_ship_shipyard_symbol)){
             if (!isShipDocked(ship_json)){
@@ -1236,6 +1284,27 @@ void applyRoleSatellite(const json &ship_json){
 
 			if (isShipAffordable("SHIP_LIGHT_SHUTTLE", shuttle_ship_shipyard_symbol)){
             	purchaseShip("SHIP_LIGHT_SHUTTLE", shuttle_ship_shipyard_symbol);
+			}
+            return;
+
+        } else {
+            if (isShipDocked(ship_json)){
+                orbitShip(ship_symbol);
+            }
+            navigateShip(ship_symbol, shuttle_ship_shipyard_symbol);
+            return;
+        }
+    }
+
+    if (hauler_to_miner_ratio < desired_hauler_to_miner_ratio){
+        // buy shuttle 
+        if (isShipAtWaypoint(ship_json, shuttle_ship_shipyard_symbol)){
+            if (!isShipDocked(ship_json)){
+                dockShip(ship_symbol);
+            }
+
+			if (isShipAffordable("SHIP_LIGHT_HAULER", shuttle_ship_shipyard_symbol)){
+            	purchaseShip("SHIP_LIGHT_HAULER", shuttle_ship_shipyard_symbol);
 			}
             return;
 
@@ -1325,6 +1394,10 @@ void applyRoleTransport(const json &ship_json){
                 const json inventory = ship_json["cargo"]["inventory"];
                 int units = cargoCount(inventory, target_resource);
                 const json deliver_result = deliverCargoToContract(target_contract_id, ship_symbol, target_resource, units);
+                if (deliver_result.contains("error")){
+                    log("ERROR", "applyRoleTransport deliverCargoToContract result contains error. exiting role");
+                    return;
+                }
 
                 // check if the contract can be handed in
                 const json contract_after_delivery = deliver_result["contract"];
@@ -1418,9 +1491,19 @@ void shipRoleApplicator(const json &ship_json){
         }
         if (role == "SURVEYOR"){
             applyRoleSurveyor(ship_json);
+            return;
         }
         if (role == "TRANSPORT"){
+            if (number_of_haulers < 1){
+                applyRoleTransport(ship_json);
+                return;
+            }
+            log("INFO", "We got a hauler, boss. I aint doin' shit.");
+            return;
+        }
+        if (role == "HAULER"){
             applyRoleTransport(ship_json);
+            return;
         }
     }
 }
@@ -1461,14 +1544,15 @@ int main(int argc, char* argv[])
         int delay_between_ships = turn_length / number_of_ships;
 
         number_of_surveyor_ships = countShipsByRole(ships, "SURVEYOR");
-        number_of_transport_ships = countShipsByRole(ships, "TRANSPORT");
+        number_of_shuttles = countShipsByRole(ships, "TRANSPORT");
         number_of_mining_ships = countShipsByRole(ships, "EXCAVATOR");
+        number_of_haulers = countShipsByRole(ships, "HAULER");
 
         // COMMAND ship counts as two mining ships.
         number_of_mining_ships = number_of_mining_ships + 2;
 
         // these ratios are used to decide the order ships are purchased in
-        transport_to_miner_ratio = number_of_transport_ships / number_of_mining_ships; 
+        hauler_to_miner_ratio = number_of_haulers / number_of_mining_ships; 
         surveyor_to_miner_ratio = number_of_surveyor_ships / number_of_mining_ships;
 
 
