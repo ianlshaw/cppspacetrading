@@ -294,7 +294,7 @@ enum priority {contracting, profiteering};
 
 int priceCheck(const string good_to_check){
 
-    log("DEBUG", "priceCheck " + good_to_check);
+    //log("DEBUG", "priceCheck " + good_to_check);
 
     json trade_goods = market_data["tradeGoods"];
     for (json market_good: trade_goods){
@@ -470,7 +470,7 @@ json listContracts(){
 }
 
 void acceptContract(const string contractId) {
-    log("DEBUG", "Attempting to accept contract" + contractId);
+    log("INFO", "Attempting to accept contract" + contractId);
     http_post("https://api.spacetraders.io/v2/my/contracts/" + contractId + "/accept");
 }
 
