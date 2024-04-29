@@ -17,8 +17,8 @@ string callsign;
 
 json error_json = {{"error", "default"}};
 
-const string category_wallet = "WALLET        | ";
-const string category_survey = "SURVEY        | ";
+const string category_wallet = "WALLET | ";
+const string category_survey = "SURVEY | ";
 
 int http_calls = 0;
 
@@ -78,18 +78,6 @@ namespace
     }
 }
 
-// we want to be able to 
-class survey {       
-  public:           
-    json surveyObject;  // Json object for an individual survey
-    int marketValue = 0;
-    float targetResourcePercentage = 0.0;        // Used to prioritize which survey is used to mine 
-};
-
-vector <survey> surveys; // Storage for the surveys we will create
-json best_survey;        // Json object for the survey with the highest score
-float best_survey_score = 0.0;
-
 // when printing an entire json object is required, this makes it easier on the eyes
 void printJson(json jsonObject){
     int indent = 4;
@@ -137,11 +125,7 @@ void log(const string level, const string message){
     cout << timestamp() << " [" << level << "] " << message << endl;
 }
 
-void report_cargo(const string ship_symbol, const json &cargo){
-    const int units = cargo["units"]; 
-    const int capacity = cargo["capacity"];
-    log("INFO", ship_symbol + " | Cargo [" + to_string(units) + "/" + to_string(capacity) + "]"); 
-}
+
 
 // wrapper to make libcurl usable enough for what we need
 json http_get(const string endpoint){
@@ -304,6 +288,102 @@ json http_post(const string endpoint, const json payload = {}, const long possib
     curl_easy_cleanup(curl);
     return error_json;
 }
+
+enum priority {contracting, profiteering};
+
+
+int priceCheck(const string good_to_check){
+
+    log("DEBUG", "priceCheck " + good_to_check);
+
+    json trade_goods = market_data["tradeGoods"];
+    for (json market_good: trade_goods){
+        if (good_to_check == market_good["symbol"]){ 
+            //log("DEBUG", to_string(market_good["sellPrice"]));
+            return market_good["sellPrice"];
+        }
+    }
+    // if a resource symbol does not appear in market_data['tradeGoods'], it is worthless.
+    return 0;
+}
+
+class survey {       
+  public:           
+    json jsonObject;  // Json object for an individual survey
+    float targetResourcePercentage = 0.0;        // Used to prioritize which survey is used to mine 
+    int marketValue = 0;
+                                                 //
+    float scoreSurveyForTargetFarming(const string symbol_to_check){
+        const json deposits = jsonObject["deposits"];
+        const float deposits_size = deposits.size();
+        float found_resource_count = 0;
+        for (json deposit: deposits){
+            const string deposit_symbol = deposit["symbol"];
+            if (deposit_symbol == symbol_to_check){
+                found_resource_count++;
+            }
+        }
+        targetResourcePercentage = found_resource_count / deposits_size;
+        //log("DEBUG", "targetResourcePercentage: " + to_string(targetResourcePercentage));
+        return targetResourcePercentage;
+    }
+
+    int scoreSurveyForProfitability(){
+         int sum_of_deposit_prices = 0;
+         json deposits = jsonObject["deposits"];
+         int number_of_deposits = deposits.size();
+         for (json deposit: deposits){
+             string deposit_symbol = deposit["symbol"];
+             int value = priceCheck(deposit_symbol);
+             sum_of_deposit_prices = sum_of_deposit_prices + value;
+         }
+
+         int value_average = sum_of_deposit_prices / number_of_deposits;
+
+         marketValue = value_average;
+         return marketValue;
+    }
+
+    bool is_null(){
+        if (jsonObject.is_null()){
+            return true;
+        } 
+        return false;
+    }
+
+};
+
+vector <survey> surveys; // Storage for the surveys we will create
+survey active_survey;        // Json object for the survey with the highest score
+
+//TODO remove this 
+
+survey bestSurveyForTargetFarming(){
+    float best_score = 0;
+    survey best_survey;
+    for (survey each_survey: surveys){
+        const float score = each_survey.targetResourcePercentage;
+        if(score > best_score){
+            best_score = score;
+            best_survey = each_survey;
+        }
+    }
+    return best_survey;
+}
+
+survey bestSurveyForProfiteering(){
+    float best_score = 0;
+    survey best_survey;
+    for (survey each_survey: surveys){
+        const float score = each_survey.marketValue;
+        if(score > best_score){
+            best_score = score;
+            best_survey = each_survey;
+        }
+    }
+    return best_survey;
+}
+
 
 // until this is true, we do not want to sell the target_resource
 bool isContractFulfilled(const json &contract_json){
@@ -598,15 +678,28 @@ void createSurvey(const string ship_symbol){
     
     for (json each_survey: result["data"]["surveys"]){
         survey a_survey;
-        a_survey.surveyObject = each_survey;
+        a_survey.jsonObject = each_survey;
         surveys.push_back(a_survey);
     }
 }
 
 // this is used to decide if the command frigate will survey or mine.
 // behaviour can be tuned via survey_score_threshold global
-bool isSurveyGoodEnough(){
-    return (best_survey_score >= survey_score_threshold ? true : false);
+bool isSurveyGoodEnough(const survey survey_to_test){
+    //log("DEBUG", "isSurveyGoodEnough");
+    //log("DEBUG", "targetResourcePercentage: " + to_string(survey_to_test.targetResourcePercentage));
+    //log("DEBUG", "marketValue: " + to_string(survey_to_test.targetResourcePercentage));
+    //log("DEBUG", "survey_score_threshold: " + to_string(survey_score_threshold));
+
+    float score;
+
+    if (isContractFulfilled(target_contract) && !market_data.is_null()){
+        score = survey_to_test.marketValue;
+    } else {
+        score = survey_to_test.targetResourcePercentage;
+    }
+   
+    return (score >= survey_score_threshold ? true : false);
 }
 
 bool isShipCargoHoldFull(const json &cargo){
@@ -690,28 +783,20 @@ bool isSurveyExpired(const json survey){
     return (seconds_until_expiry <= 30 ? true : false);
 }
 
+//TODO remove this
 void promoteBestSurveyForTargetFarming(){
     //log("DEBUG", "promoteBestSurveyForTargetFarming");
 
-    for (survey item: surveys){
-        if (item.targetResourcePercentage > best_survey_score){
-            best_survey_score = item.targetResourcePercentage;
-            best_survey = item.surveyObject;
-            log("INFO", category_survey + "New best survey. Score = " + to_string(best_survey_score));
-        }
-    }
+    active_survey = bestSurveyForTargetFarming();
+
 }
 
+// TODO remove this
 void promoteBestSurveyForProfitability(){
 	//log("DEBUG", "promoteBestSurveyForProfitability");
+    
+    active_survey = bestSurveyForProfiteering();
 
-	for (survey item: surveys){
-		if (item.marketValue > best_survey_score){
-			best_survey_score = item.marketValue;
-			best_survey = item.surveyObject;
-			log("INFO", category_survey + "New best survey. Score = " + to_string(best_survey_score));
-		}
-	}
 }
 
 void promoteBestSurvey(){
@@ -724,25 +809,6 @@ void promoteBestSurvey(){
     }
 }
 
-int priceCheck(const string good_to_check){
-
-    //log("DEBUG", "priceCheck " + good_to_check);
-
-    // market data will only be available after the transport has delivered/sold at least once.
-    if (market_data.is_null()){
-        cout << "[ERROR] priceCheck before market data is in. returning 0" << endl;
-        return 0;
-    }
-
-    json trade_goods = market_data["tradeGoods"];
-    for (json market_good: trade_goods){
-        if (good_to_check == market_good["symbol"]){ 
-            //log("DEBUG", to_string(market_good["sellPrice"]));
-            return market_good["sellPrice"];
-        }
-    }
-    return 0;
-}
 
 void scoreSurveysForTargetFarming(const string trade_good){
 
@@ -750,24 +816,12 @@ void scoreSurveysForTargetFarming(const string trade_good){
 
     int index = 0;
     for (survey item: surveys){
-        float hits = 0; 
-        const json deposits = item.surveyObject["deposits"];
-        const float total_deposits = deposits.size();
-        for (json deposit: deposits){
-            const string symbol = deposit["symbol"];
-            if (symbol == trade_good){
-                hits++;
-            }
+        if (item.targetResourcePercentage > 0){
+            index++;
+            continue;
         }
-
-        //cout << "[DEBUG] hits = " << hits << endl;
-        //cout << "[DEBUG] total_deposits = " << total_deposits << endl;
-
-        const float target_resource_percentage = hits / total_deposits;
-
-        //cout << "[DEBUG] target_resource_percentage = " << target_resource_percentage << endl;
-
-        surveys.at(index).targetResourcePercentage = target_resource_percentage;
+        float score = item.scoreSurveyForTargetFarming(trade_good);
+        surveys.at(index).targetResourcePercentage = score;
         index++;
     }
 }
@@ -781,28 +835,16 @@ void scoreSurveysForProfitability(){
         return;
 	}
 
-	int index = 0;
+    int index = 0;
     for (survey item: surveys){
-        int sum_of_deposit_prices = 0;
-        json survey_object = item.surveyObject;
-        json deposits = survey_object["deposits"];
-        int number_of_deposits = deposits.size();
-        for (json deposit: deposits){
-            string deposit_symbol = deposit["symbol"];
-            int value = priceCheck(deposit_symbol);
-			sum_of_deposit_prices = sum_of_deposit_prices + value;
-        }
-
-		int value_average = sum_of_deposit_prices / number_of_deposits;
-
-		surveys.at(index).marketValue = value_average;
-		index++;
+        float score = item.scoreSurveyForProfitability();
+        surveys.at(index).marketValue = score;
+        index++;
     } 
 }
 
 void resetBestSurvey(){
-	best_survey_score = 0.0;
-	best_survey = {};
+	active_survey = {};
 }
 
 bool isAtLeastOneTransportOnSite(){
@@ -844,11 +886,11 @@ void removeExpiredSurveys(){
     int vector_index = 0;
     while(vector_index < surveys.size()){
         survey each_survey = surveys.at(vector_index);
-        json each_survey_object = each_survey.surveyObject;
+        json each_survey_object = each_survey.jsonObject;
         if (isSurveyExpired(each_survey_object)){
             log("INFO", category_survey + "Erasing expired survey");
             surveys.erase(surveys.begin() + vector_index);
-            if (each_survey_object == best_survey){
+            if (each_survey_object == active_survey.jsonObject){
             	log("INFO", category_survey + "Best survey erased! Updating best survey...");
 				resetBestSurvey();
             }
@@ -863,7 +905,7 @@ bool removeSurveyBySignature(const string signature_to_remove){
     //log("DEBUG", "removeSurveyBySignature " + signature_to_remove);
     int vector_index = 0;
     for (survey each_survey: surveys){
-        json each_survey_object = each_survey.surveyObject;
+        json each_survey_object = each_survey.jsonObject;
         string each_survey_signature = each_survey_object["signature"];
         //log("DEBUG", "signature:" + each_survey_signature);
         if (signature_to_remove == each_survey_signature){
@@ -917,7 +959,6 @@ void jettisonCargo(const string ship_symbol, const string cargo_symbol, const in
                             + "/" 
                             + to_string(capacity) 
                             + "]");
-    //report_cargo(ship_symbol, cargo);
 }
 
 
@@ -945,7 +986,6 @@ json extractResourcesWithSurvey(const string ship_symbol, const json target_surv
     const json cargo = result["data"]["cargo"];
 
     log("INFO", ship_symbol + " | Extracted " + to_string(extracted_resource_units) + " units of " + extracted_resource_symbol + " [" + to_string(cargo["units"]) + "/" + to_string(cargo["capacity"]) + "]");  
-    //report_cargo(ship_symbol, cargo);
 
     return result["data"];
 }
@@ -986,18 +1026,25 @@ void fulfillContract(const string contract_id){
 
     if (!result.contains("data")){
         log("ERROR", "fulfillContract result does not contain data key");
+        return;
     }
     const json data = result["data"];
 
-    if (data.contains("contract")){
-        // update the global target_contract after it is fulfilled.
-        target_contract = result["data"]["contract"];
-        log("DEBUG", "filfillContract updated global target_contract");
-    } else {
+    if(!data.contains("contract")){
         log("ERROR", "fulfillContract data does not contain contract key");
+        return;
     }
 
-    log("INFO", "Contract fulfilled, rejoice!");
+    target_contract = data["contract"];
+
+    bool contract_fulfilled = target_contract["fulfilled"];
+
+    if (contract_fulfilled){
+        log("INFO", "Contract fulfilled, rejoice!");
+        return;
+    } else {
+        log("ERROR", "fulfillContract failed to update target target_contract['fulfilled'])");
+    }
 }
 
 json deliverCargoToContract(const string contract_id, const string ship_symbol, const string trade_symbol, const int units){
@@ -1109,7 +1156,6 @@ json transferCargo(const string source_ship_symbol, const string destination_shi
     }
     const int capacity_after_transfer = cargo["capacity"];
 
-    //report_cargo(source_ship_symbol, cargo);
 
     log("INFO", source_ship_symbol + " | transferCargo "    
         + to_string(units) + " " 
@@ -1307,13 +1353,13 @@ void applyRoleMiner(const json &ship_json){
 	    promoteBestSurvey();	
 
         // if there is no survey, we may as well wait.
-        if (best_survey.is_null()){
+        if (active_survey.is_null()){
             log("WARN", "No survey no point, boss.");
             return;
         }
 
         // execute mining operation
-        const json result = extractResourcesWithSurvey(ship_symbol, best_survey);
+        const json result = extractResourcesWithSurvey(ship_symbol, active_survey.jsonObject);
         if (result.contains("error")){
             //log("WARN", "extractResourcesWithSurvey returned error, skipping transfer subroutine.");
             return;
@@ -1440,7 +1486,6 @@ void applyRoleHauler(const json &ship_json){
     const string ship_symbol = ship_json["symbol"];
     const json cargo = ship_json["cargo"];
 
-    report_cargo(ship_symbol, cargo);
 
     // if ship is currently travelling, dont waste any further cycles.
     if (isShipInTransit(ship_json)){
@@ -1554,8 +1599,9 @@ void commandShipRoleDecider(const json &ship_json){
 
     const string ship_symbol = ship_json["symbol"];
 
+    
     // do we have a good survey?
-    if (isSurveyGoodEnough()){
+    if (isSurveyGoodEnough(active_survey)){
 		log("INFO", ship_symbol +  " | Survey is good enough. Mining...");
         // then lets mine.
         applyRoleMiner(ship_json);
