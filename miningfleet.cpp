@@ -266,9 +266,6 @@ json http_post(const string endpoint, const json payload = {}, const long possib
     return error_json;
 }
 
-enum priority {contracting, profiteering};
-
-
 int priceCheck(const string good_to_check){
 
     //log("DEBUG", "priceCheck " + good_to_check);
