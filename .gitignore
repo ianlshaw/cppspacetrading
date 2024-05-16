@@ -13,3 +13,4 @@ includetest.cpp
 post.cpp
 /curio.dSYM
 curio
+.vscode

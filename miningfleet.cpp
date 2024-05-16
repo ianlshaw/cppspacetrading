@@ -171,6 +171,7 @@ json http_get(const string endpoint){
 
         if (httpCode != 200 && httpCode != 201){
             cout << "http_get error: " << endl;
+            cout << *httpData << endl;
             printJson(output_as_json);
         }
 
@@ -275,8 +276,11 @@ json http_post(const string endpoint, const json payload = {}, const long possib
            log("ERROR", "http_post() returned non-20X");
            log("ERROR", "payload: " + payload.dump());
            log("ERROR", to_string(httpCode));
+           cout << *httpData << endl;
            printJson(output_as_json);
        }
+
+       
 
        // always reset curl handle after use   
        curl_easy_reset(curl);
@@ -671,8 +675,6 @@ void createSurvey(const string ship_symbol){
     //log("DEBUG", "createSurvey");
 
     json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/survey");
-
-    //printJson(result);
 
 	log("INFO", ship_symbol + " | createSurvey");
     
@@ -1240,7 +1242,6 @@ int countShipsByRole(const json &ship_list, const string role){
 // only once this is true should we attempt to fulfill the contract
 bool areContractRequirementsMet(const json contract_json){
     //cout << "[DEBUG] areContractRequirementsMet" << endl;
-    //printJson(contract_json);
     if (contract_json["terms"]["deliver"][0]["unitsFulfilled"].is_number_integer() &&
         contract_json["terms"]["deliver"][0]["unitsRequired"].is_number_integer()){
             const int units_fulfilled = contract_json["terms"]["deliver"][0]["unitsFulfilled"];
@@ -1364,7 +1365,6 @@ void applyRoleMiner(const json &ship_json){
             //log("WARN", "extractResourcesWithSurvey returned error, skipping transfer subroutine.");
             return;
         }
-        //printJson(result);
         const string extracted_resource_symbol = result["extraction"]["yield"]["symbol"];
         const int extracted_resource_units = result["extraction"]["yield"]["units"];
         const json cargo = result["cargo"];
