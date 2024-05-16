@@ -8,6 +8,7 @@
 #include <unistd.h>   
 #include <curl/curl.h>
 #include "json.hpp"
+#include "auth-file-utils.h"
 
 using json = nlohmann::json;
 
@@ -83,34 +84,6 @@ void printJson(json jsonObject){
     int indent = 4;
     string pretty_json = jsonObject.dump(indent);
     cout << pretty_json;
-}
-
-// auth token file will only exist after first run
-bool doesAuthFileExist(const string& authTokenFile) {
-    ifstream auth_token_file_stream(authTokenFile.c_str());
-    return auth_token_file_stream.good();
-}
-
-// Register Agent returns an auth token we want to keep safe 
-void writeAuthTokenToFile(const string token){
-     ofstream myfile;
-     string filename = callsign + ".token";
-     cout << "[INFO] Wrote auth file to: " << filename << endl;
-     myfile.open (filename);
-     myfile << token;
-     myfile.close();
-}
-
-// a corresponding *.token in .gitignore is a simple way to avoid leaking a callsigns authentication token
-string readAuthTokenFromFile(const string authTokenFile){
-    string myText;
-    string wholeDocument;
-    ifstream MyReadFile(authTokenFile);
-    while (getline (MyReadFile, myText)) {
-      wholeDocument = wholeDocument + myText;
-    }
-    MyReadFile.close();
-    return wholeDocument;
 }
 
 string timestamp(){
@@ -421,7 +394,7 @@ void registerAgent(const string callsign, const string faction) {
     register_agent_json_object["symbol"] = callsign;
     register_agent_json_object["faction"] = faction;
     json result = http_post("https://api.spacetraders.io/v2/register", register_agent_json_object);
-    writeAuthTokenToFile(result["data"]["token"]);
+    writeAuthTokenToFile(result["data"]["token"], callsign);
 }
 
 json getAgent(){
@@ -1706,6 +1679,8 @@ int main(int argc, char* argv[])
         json ships = listShips();
 
         int number_of_ships = ships.size();
+        log("INFO", "Number of ships: " + to_string(number_of_ships));
+
         int delay_between_ships = turn_length / number_of_ships;
 
         number_of_surveyor_ships = countShipsByRole(ships, "SURVEYOR");
