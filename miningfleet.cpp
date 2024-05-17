@@ -174,22 +174,6 @@ bool haveEnoughCredits(const int price){
     return(credits > price ? true : false);
 }
 
-json listShips(){
-    const json result = http_get(callsign, "https://api.spacetraders.io/v2/my/ships?limit=20");
-    if (result.contains("data")){
-  	    return result["data"];
-    }
-    return result;
-}
-
-json getShip(const string ship_symbol){
-    const json result = http_get(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol);
-    if (result.contains("data")){
-        return result["data"];
-    }
-    return result;
-}
-
 json listWaypointsInSystem(const string system_symbol){
     return http_get(callsign, "https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints");
 }
@@ -306,7 +290,7 @@ void initializeGlobals(){
     log("INFO", "target_resource = " + target_resource);
     log("INFO", "survey_score_threshold: " + to_string(survey_score_threshold));
     log("INFO", "contract_fulfilled = " + to_string(target_contract["fulfilled"]));
-    json first_ship = getShip(callsign + "-1");
+    json first_ship = getShip(callsign, callsign + "-1");
     system_symbol = first_ship["nav"]["systemSymbol"];
     system_waypoints_list = listWaypointsInSystem(system_symbol);
     asteroid_belt_symbol = findWaypointByType(system_symbol, "ENGINEERED_ASTEROID"); 
@@ -363,29 +347,6 @@ bool isShipInOrbit(const json &ship_json){
         log("ERROR", "isShipInOrbit ship_json['nav']['status'] not string");
         return false;
     }
-}
-
-void orbitShip(const string ship_symbol){
-    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/orbit");
-    const string status = result["data"]["nav"]["status"];
-    log("INFO", ship_symbol + " | " + status);
-}
-
-void dockShip(const string ship_symbol){
-    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/dock");
-    const string status = result["data"]["nav"]["status"];
-    log("INFO", ship_symbol + " | " + status);
-}
-
-void navigateShip(const string ship_symbol, const string waypoint_symbol){
-    json payload;
-    payload["waypointSymbol"] = waypoint_symbol;
-    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/navigate", payload);
-    const json nav = result["data"]["nav"];
-    const string status = nav["status"];
-    const string origin_symbol = nav["route"]["origin"]["symbol"];
-    const string destination_symbol = nav["route"]["destination"]["symbol"];
-    log("INFO",  ship_symbol + " | navigate "  + status + " from " + origin_symbol + " to " + destination_symbol);
 }
 
 void createSurvey(const string ship_symbol){
@@ -591,7 +552,7 @@ void removeTransportFromOnSiteVector(const string &ship_symbol){
 void sendHaulerToMarket(const string ship_symbol){
     log("INFO", ship_symbol + " | Heading to market");
     removeTransportFromOnSiteVector(ship_symbol);
-    navigateShip(ship_symbol, delivery_waypoint_symbol);
+    navigateShip(callsign, ship_symbol, delivery_waypoint_symbol);
 }
 
 void removeExpiredSurveys(){
@@ -642,37 +603,6 @@ bool isItemWorthKeeping(const string item){
     }
     return false;
 }
-
-// this is how we throw away useless goods obtained by mining
-void jettisonCargo(const string ship_symbol, const string cargo_symbol, const int units){
-
-	//log("DEBUG", "Jettisoning " + to_string(units) + " units of " + cargo_symbol);
-
-	if (units <= 0) {
-		log("WARN", "Discarding attempt to jettison 0 or less");
-		return;
-	}
-
-    json payload;
-    payload["symbol"] = cargo_symbol;
-    payload["units"] = units;
-
-
-    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/jettison", payload);
-
-    const json cargo = result["data"]["cargo"];
-    const int units_after_jettison = cargo["units"];
-    const int capacity = cargo["capacity"];
-
-    log("INFO", ship_symbol + " | Jettisoned " 
-                            + cargo_symbol 
-                            + " [" 
-                            + to_string(units_after_jettison)
-                            + "/" 
-                            + to_string(capacity) 
-                            + "]");
-}
-
 
 json extractResourcesWithSurvey(const string ship_symbol, const json target_survey){
 
@@ -742,22 +672,6 @@ void sellCargo(const string ship_symbol, const string cargo_symbol, const int un
     const int new_balance = result["data"]["agent"]["credits"];
     update_credits(new_balance);
     log("INFO", category_wallet + "Balance: " + to_string(new_balance));
-}
-
-void purchaseShip(const string ship_type, const string waypoint_symbol){
-    json payload;
-    payload["shipType"] = ship_type;
-    payload["waypointSymbol"] = waypoint_symbol;
-    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships", payload);
-    if (result.contains("error")){
-        log("ERROR", "purchaseShip returned error");
-        return;
-    }
-
-    const int price = result["data"]["transaction"]["price"];
-    const int balance = result["data"]["agent"]["credits"];
-    const string role = result["data"]["ship"]["registration"]["role"];
-    log("INFO", "Purchased " + role + " for " + to_string(price) + " new balance: " + to_string(balance));
 }
 
 json transferCargo(const string source_ship_symbol, const string destination_ship_symbol, const string trade_symbol, const int units){
@@ -928,9 +842,9 @@ void applyRoleSurveyor(const json &ship_json){
        
     } else {
         if (isShipDocked(ship_json)){
-            orbitShip(ship_symbol);
+            orbitShip(callsign, ship_symbol);
         }
-        navigateShip(ship_symbol, asteroid_belt_symbol);
+        navigateShip(callsign, ship_symbol, asteroid_belt_symbol);
     }
 }
 
@@ -957,10 +871,10 @@ void applyRoleMiner(const json &ship_json){
     // if mining ship is not at the asteroid belt. undock and go there.
     if (!isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         if (isShipDocked(ship_json)){
-            orbitShip(ship_symbol);
+            orbitShip(callsign, ship_symbol);
             http_calls++;
         }
-        navigateShip(ship_symbol, asteroid_belt_symbol);
+        navigateShip(callsign, ship_symbol, asteroid_belt_symbol);
         http_calls++;
         return;
     }
@@ -1008,7 +922,7 @@ void applyRoleMiner(const json &ship_json){
                 
         // immidiately jettison anything which is not on the resource_keep_list
         if (!isItemWorthKeeping(extracted_resource_symbol)){
-            jettisonCargo(ship_symbol, extracted_resource_symbol, extracted_resource_units);
+            jettisonCargo(callsign, ship_symbol, extracted_resource_symbol, extracted_resource_units);
             http_calls++;
         } else {
             // if theres a transport nearby, we can save a turn by transferring it immidiately.
@@ -1031,22 +945,22 @@ void applyRoleSatellite(const json &ship_json){
         //buy surveyor ship
         if (isShipAtWaypoint(ship_json, surveyor_ship_shipyard_symbol)){
             if (!isShipDocked(ship_json)){
-                dockShip(ship_symbol);
+                dockShip(callsign, ship_symbol);
                 http_calls++;
             } 
 
 			if (isShipAffordable("SHIP_SURVEYOR", surveyor_ship_shipyard_symbol)){
-            	purchaseShip("SHIP_SURVEYOR", surveyor_ship_shipyard_symbol);
+            	purchaseShip(callsign, "SHIP_SURVEYOR", surveyor_ship_shipyard_symbol);
                 http_calls++;
 			}
             return;
 
         } else {
             if (isShipDocked(ship_json)){
-                orbitShip(ship_symbol);
+                orbitShip(callsign, ship_symbol);
                 http_calls++;
             }
-            navigateShip(ship_symbol, surveyor_ship_shipyard_symbol);
+            navigateShip(callsign, ship_symbol, surveyor_ship_shipyard_symbol);
             http_calls++;
             return;
         }
@@ -1056,22 +970,22 @@ void applyRoleSatellite(const json &ship_json){
         // buy shuttle 
         if (isShipAtWaypoint(ship_json, shuttle_ship_shipyard_symbol)){
             if (!isShipDocked(ship_json)){
-                dockShip(ship_symbol);
+                dockShip(callsign, ship_symbol);
                 http_calls++;
             }
 
 			if (isShipAffordable("SHIP_LIGHT_SHUTTLE", shuttle_ship_shipyard_symbol)){
-            	purchaseShip("SHIP_LIGHT_SHUTTLE", shuttle_ship_shipyard_symbol);
+            	purchaseShip(callsign, "SHIP_LIGHT_SHUTTLE", shuttle_ship_shipyard_symbol);
                 http_calls++;
 			}
             return;
 
         } else {
             if (isShipDocked(ship_json)){
-                orbitShip(ship_symbol);
+                orbitShip(callsign, ship_symbol);
                 http_calls++;
             }
-            navigateShip(ship_symbol, shuttle_ship_shipyard_symbol);
+            navigateShip(callsign, ship_symbol, shuttle_ship_shipyard_symbol);
             http_calls++;
             return;
         }
@@ -1081,22 +995,22 @@ void applyRoleSatellite(const json &ship_json){
         // buy shuttle 
         if (isShipAtWaypoint(ship_json, shuttle_ship_shipyard_symbol)){
             if (!isShipDocked(ship_json)){
-                dockShip(ship_symbol);
+                dockShip(callsign, ship_symbol);
                 http_calls++;
             }
 
 			if (isShipAffordable("SHIP_LIGHT_HAULER", shuttle_ship_shipyard_symbol)){
-            	purchaseShip("SHIP_LIGHT_HAULER", shuttle_ship_shipyard_symbol);
+            	purchaseShip(callsign, "SHIP_LIGHT_HAULER", shuttle_ship_shipyard_symbol);
                 http_calls++;
 			}
             return;
 
         } else {
             if (isShipDocked(ship_json)){
-                orbitShip(ship_symbol);
+                orbitShip(callsign, ship_symbol);
                 http_calls++;
             }
-            navigateShip(ship_symbol, shuttle_ship_shipyard_symbol);
+            navigateShip(callsign, ship_symbol, shuttle_ship_shipyard_symbol);
             http_calls++;
             return;
         }
@@ -1107,21 +1021,21 @@ void applyRoleSatellite(const json &ship_json){
         // buy mining ship
         if (isShipAtWaypoint(ship_json, mining_ship_shipyard_symbol)){
             if (!isShipDocked(ship_json)){
-                dockShip(ship_symbol);
+                dockShip(callsign, ship_symbol);
                 http_calls++;
             }
 
              if (isShipAffordable("SHIP_MINING_DRONE", mining_ship_shipyard_symbol)){
-                 purchaseShip("SHIP_MINING_DRONE", mining_ship_shipyard_symbol);
+                 purchaseShip(callsign, "SHIP_MINING_DRONE", mining_ship_shipyard_symbol);
                  http_calls++;
              }
 
         } else {
             if (isShipDocked(ship_json)){
-                orbitShip(ship_symbol);
+                orbitShip(callsign, ship_symbol);
                 http_calls++;
             }
-            navigateShip(ship_symbol, mining_ship_shipyard_symbol);
+            navigateShip(callsign, ship_symbol, mining_ship_shipyard_symbol);
             http_calls++;
             return;
         }
@@ -1158,7 +1072,7 @@ void applyRoleHauler(const json &ship_json){
     // once full, leave the asteroid belt and head to the marketplace
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol) && isShipCargoHoldFull(cargo)){
         log("INFO", ship_symbol + " | Cargo full. Heading to market, boss.");
-        navigateShip(ship_symbol, delivery_waypoint_symbol);
+        navigateShip(callsign, ship_symbol, delivery_waypoint_symbol);
         http_calls++;
 		removeTransportFromOnSiteVector(ship_symbol);
         return;
@@ -1170,7 +1084,7 @@ void applyRoleHauler(const json &ship_json){
         if (!isShipCargoHoldEmpty(cargo)){
             // dock if we arent already
             if (!isShipDocked(ship_json)){
-                dockShip(ship_symbol);
+                dockShip(callsign, ship_symbol);
                 http_calls++; 
             }
             refuelShip(ship_symbol);
@@ -1215,9 +1129,9 @@ void applyRoleHauler(const json &ship_json){
                     http_calls++;
                 }
                 // once everything is sold, head back to the belt
-                orbitShip(ship_symbol);
+                orbitShip(callsign, ship_symbol);
                 http_calls++;
-                navigateShip(ship_symbol, asteroid_belt_symbol);
+                navigateShip(callsign, ship_symbol, asteroid_belt_symbol);
                 http_calls++;
                 return;
             } else {
@@ -1230,9 +1144,9 @@ void applyRoleHauler(const json &ship_json){
                     http_calls++;
                 }
                 // once everything is sold, head back to the belt
-                orbitShip(ship_symbol);
+                orbitShip(callsign, ship_symbol);
                 http_calls++;
-                navigateShip(ship_symbol, asteroid_belt_symbol);
+                navigateShip(callsign, ship_symbol, asteroid_belt_symbol);
                 http_calls++;
                 return;
             }
@@ -1241,10 +1155,10 @@ void applyRoleHauler(const json &ship_json){
     // catch all. if the ship is somewhere other than asteroid belt or marketplace, move it to the asteroid belt.
     if (!isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         if (isShipDocked(ship_json)){
-            orbitShip(ship_symbol);
+            orbitShip(callsign, ship_symbol);
             http_calls++;
         }
-        navigateShip(ship_symbol, asteroid_belt_symbol);
+        navigateShip(callsign, ship_symbol, asteroid_belt_symbol);
         http_calls++;
     }
 }
@@ -1333,13 +1247,13 @@ void shipRoleApplicator(const json &ship_json){
         // we run getShip on these two roles because their cargo holds can be modified out of turn
         // this therefore ensures their cargo reports and locations/status are accurate when their roles are applied
         if (role == "TRANSPORT"){
-            const json transport_ship_json = getShip(ship_symbol);
+            const json transport_ship_json = getShip(callsign, ship_symbol);
             http_calls++;
             applyRoleTransport(transport_ship_json);
             return;
         }
         if (role == "HAULER"){
-            const json transport_ship_json = getShip(ship_symbol);
+            const json transport_ship_json = getShip(callsign, ship_symbol);
             http_calls++;
             applyRoleHauler(transport_ship_json);
             return;
@@ -1377,7 +1291,7 @@ int main(int argc, char* argv[])
         turn_number++;
         log("INFO", "Turn " + to_string(turn_number));
 
-        json ships = listShips();
+        json ships = listShips(callsign);
 
         int number_of_ships = ships.size();
         log("INFO", "Number of ships: " + to_string(number_of_ships));
@@ -1400,8 +1314,6 @@ int main(int argc, char* argv[])
 
         for (json ship : ships){
             string ship_symbol = ship["symbol"];
-            // save number of ships requests per turn by avoiding this getShip and using the original listShips result
-            //json get_ship_result = getShip(ship_symbol);
             shipRoleApplicator(ship);
             cout << endl;
             sleep(delay_between_ships);

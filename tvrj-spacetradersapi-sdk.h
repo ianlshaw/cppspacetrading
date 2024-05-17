@@ -160,14 +160,48 @@ json fulfillContract(const string callsign, const string contract_id){
 // Fleet
 
 // List Ships
+json listShips(const string callsign){
+    const json result = http_get(callsign, "https://api.spacetraders.io/v2/my/ships?limit=20");
+    if (result.contains("data")){
+  	    return result["data"];
+    }
+    return result;
+}
 
 // Purchase Ship
+void purchaseShip(const string callsign, const string ship_type, const string waypoint_symbol){
+    json payload;
+    payload["shipType"] = ship_type;
+    payload["waypointSymbol"] = waypoint_symbol;
+    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships", payload);
+    if (result.contains("error")){
+        log("ERROR", "purchaseShip returned error");
+        return;
+    }
+
+    const int price = result["data"]["transaction"]["price"];
+    const int balance = result["data"]["agent"]["credits"];
+    const string role = result["data"]["ship"]["registration"]["role"];
+    log("INFO", "Purchased " + role + " for " + to_string(price) + " new balance: " + to_string(balance));
+}
 
 // Get Ship
+json getShip(const string callsign, const string ship_symbol){
+    const json result = http_get(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol);
+    if (result.contains("data")){
+        return result["data"];
+    }
+    return result;
+}
 
 // Get Ship Cargo
 
 // Orbit Ship
+void orbitShip(const string callsign, const string ship_symbol){
+    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/orbit");
+    const string status = result["data"]["nav"]["status"];
+    log("INFO", ship_symbol + " | " + status);
+}
 
 // Ship Refine
 
@@ -176,6 +210,11 @@ json fulfillContract(const string callsign, const string contract_id){
 // Get Ship Cooldown
 
 // Dock Ship
+void dockShip(const string callsign, const string ship_symbol){
+    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/dock");
+    const string status = result["data"]["nav"]["status"];
+    log("INFO", ship_symbol + " | " + status);
+}
 
 // Create Survey
 
@@ -186,10 +225,46 @@ json fulfillContract(const string callsign, const string contract_id){
 // Extract Resources With Survey
 
 // Jettison Cargo
+void jettisonCargo(const string callsign, const string ship_symbol, const string cargo_symbol, const int units){
+	
+    if (units <= 0) {
+		log("WARN", "Discarding attempt to jettison 0 or less");
+		return;
+	}
+
+    json payload;
+    payload["symbol"] = cargo_symbol;
+    payload["units"] = units;
+
+
+    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/jettison", payload);
+
+    const json cargo = result["data"]["cargo"];
+    const int units_after_jettison = cargo["units"];
+    const int capacity = cargo["capacity"];
+
+    log("INFO", ship_symbol + " | Jettisoned " 
+                            + cargo_symbol 
+                            + " [" 
+                            + to_string(units_after_jettison)
+                            + "/" 
+                            + to_string(capacity) 
+                            + "]");
+}
 
 // Jump Ship
 
 // Navigate Ship
+void navigateShip(const string callsign, const string ship_symbol, const string waypoint_symbol){
+    json payload;
+    payload["waypointSymbol"] = waypoint_symbol;
+    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/navigate", payload);
+    const json nav = result["data"]["nav"];
+    const string status = nav["status"];
+    const string origin_symbol = nav["route"]["origin"]["symbol"];
+    const string destination_symbol = nav["route"]["destination"]["symbol"];
+    log("INFO",  ship_symbol + " | navigate "  + status + " from " + origin_symbol + " to " + destination_symbol);
+}
 
 // Patch Ship Nav
 
