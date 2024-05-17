@@ -13,6 +13,8 @@ using json = nlohmann::json;
 
 // Get Status
 
+// Agents
+
 // Register New Agent
 void registerAgent(const string callsign, const string faction) {
 
@@ -45,6 +47,8 @@ json getAgent(const string callsign){
 // List Agents
 
 // Get Public Agent
+
+// Contracts
 
 // List Contracts
 json listContracts(const string callsign){
@@ -82,3 +86,103 @@ json acceptContract(const string callsign, const string contractId) {
     printJson(result);
     return result;
 }
+
+// Deliver Cargo To Contract
+
+// Fulfill Contract
+
+// Factions
+
+// List Factions
+
+// Get Faction
+
+// Fleet
+
+// List Ships
+
+// Purchase Ship
+
+// Get Ship
+
+// Get Ship Cargo
+
+// Orbit Ship
+
+// Ship Refine
+
+// Create Chart
+
+// Get Ship Cooldown
+
+// Dock Ship
+
+// Create Survey
+
+// Extract Resources
+
+// Siphon Resources
+
+// Extract Resources With Survey
+
+// Jettison Cargo
+
+// Jump Ship
+
+// Navigate Ship
+
+// Patch Ship Nav
+
+// Get Ship Nav
+
+// Warp Ship
+
+// Sell Cargo
+
+// Scan Systems
+
+// Scan Waypoints
+
+// Scan Ships
+
+// Refuel Ship
+
+// Purchase Cargo
+
+// Transfer Cargo
+
+// Negotiate Contract
+
+// Get Mounts
+
+// Install Mount
+
+// Remove Mount
+
+// Get Scrap Ship
+
+// Scrap Ship
+
+// Get Repair Ship
+
+// Repair Ship
+
+// Systems
+
+// List Systems
+
+// Get System
+
+// List Waypoints In System
+
+// Get Waypoint
+
+// Get Market
+
+// Get Shipyard
+
+// Get Jump Gate
+
+// Get Construction Site
+
+// Supply Construction Site
