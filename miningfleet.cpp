@@ -202,23 +202,6 @@ string shipSymbolFromJson(const json ship_json){
     return "ERROR SHIP JSON DOES NOT CONTAIN SYMBOL";
 }
 
-json getContract(const string contract_id){
-    return http_get(callsign, "https://api.spacetraders.io/v2/my/contracts/" + contract_id);
-}
-
-json listContracts(){
-    const json result = http_get(callsign, "https://api.spacetraders.io/v2/my/contracts");
-    if (!result.contains("data")){
-        return result;
-    }
-    return result["data"];
-}
-
-void acceptContract(const string contractId) {
-    log("INFO", "Attempting to accept contract" + contractId);
-    http_post(callsign, "https://api.spacetraders.io/v2/my/contracts/" + contractId + "/accept");
-}
-
 bool hasContractBeenAccepted(const json contract_json){
     if (contract_json["accepted"].is_boolean()){
         return contract_json["accepted"];
@@ -313,7 +296,7 @@ json getMarket(const string system_symbol, const string waypoint_symbol){
 }
 
 void initializeGlobals(){
-    contracts_list = listContracts();
+    contracts_list = listContracts(callsign);
     // this next one is potentially an error. since the item target_contract holds right now is the first in the result
     // of the list contracts method, NOT the result of a get contract against the contract ID.
     // i should check what is the difference.
@@ -1402,7 +1385,7 @@ int main(int argc, char* argv[])
    
     // attempting to accept an already accepted contract with throw http non-20X 
     if (!hasContractBeenAccepted(target_contract)){
-        acceptContract(target_contract_id);
+        acceptContract(callsign, target_contract_id);
     }
 
     int turn_number = 0;
