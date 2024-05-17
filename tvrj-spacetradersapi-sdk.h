@@ -88,8 +88,68 @@ json acceptContract(const string callsign, const string contractId) {
 }
 
 // Deliver Cargo To Contract
+json deliverCargoToContract(const string callsign, const string contract_id, const string ship_symbol, const string trade_symbol, const int units){
+    json payload;
+    payload["shipSymbol"] = ship_symbol;
+    payload["tradeSymbol"] = trade_symbol;
+    payload["units"] = units;
+    json result = http_post(callsign, "https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/deliver", payload);
+
+    if (result.contains("error")){
+        return result;
+    }
+
+    if (!result["data"]["contract"]["terms"]["deliver"][0]["unitsFulfilled"].is_number_integer()){
+        log("ERROR", "[ERROR] deliverCargoToContract result['data']['contract']['terms']['deliver'][0]['unitsFulfilled'] is not an integer");
+        return result;
+    }
+
+    if (!result["data"]["contract"]["terms"]["deliver"][0]["unitsRequired"].is_number_integer()){
+        log("ERROR", "deliverCargoToContract result['data']['contract']['terms']['deliver'][0]['unitsRequired'] is not an integer");
+        return result;
+    }
+
+    int units_fulfilled = result["data"]["contract"]["terms"]["deliver"][0]["unitsFulfilled"];
+    int units_required = result["data"]["contract"]["terms"]["deliver"][0]["unitsRequired"];
+
+    log("INFO", ship_symbol + " | Delivered " + to_string(units) + " of " + trade_symbol + " [" + to_string(units_fulfilled) + "/" +
+    to_string(units_required) + "]");
+
+    return result["data"];
+}
 
 // Fulfill Contract
+json fulfillContract(const string callsign, const string contract_id){
+    json result = http_post(callsign, "https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/fulfill");
+
+    if (result.contains("error")){
+        log("ERROR", "fulfillContract returned error");
+        return result;
+    }
+
+    if (!result.contains("data")){
+        log("ERROR", "fulfillContract result does not contain data key");
+        return result;
+    }
+    const json data = result["data"];
+
+    if(!data.contains("contract")){
+        log("ERROR", "fulfillContract data does not contain contract key");
+        return result;
+    }
+
+    const json contract = data["contract"];
+
+    const bool contract_fulfilled = contract["fulfilled"];
+
+    if (contract_fulfilled){
+        log("INFO", "Contract fulfilled, rejoice!");
+        return data;
+    } else {
+        log("ERROR", "fulfillContract failed to fulfill contract.");
+        return result;
+    }
+}
 
 // Factions
 

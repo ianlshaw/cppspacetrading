@@ -723,69 +723,6 @@ int cargoRemaining(const json &cargo){
     return capacity - units;
 }
 
-void fulfillContract(const string contract_id){
-    log("DEBUG", "fulfillContract");
-    json result = http_post(callsign, "https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/fulfill");
-
-    if (result.contains("error")){
-        log("ERROR", "fulfillContract returned error");
-        return;
-    }
-
-    if (!result.contains("data")){
-        log("ERROR", "fulfillContract result does not contain data key");
-        return;
-    }
-    const json data = result["data"];
-
-    if(!data.contains("contract")){
-        log("ERROR", "fulfillContract data does not contain contract key");
-        return;
-    }
-
-    target_contract = data["contract"];
-
-    bool contract_fulfilled = target_contract["fulfilled"];
-
-    if (contract_fulfilled){
-        log("INFO", "Contract fulfilled, rejoice!");
-        return;
-    } else {
-        log("ERROR", "fulfillContract failed to update target target_contract['fulfilled'])");
-    }
-}
-
-json deliverCargoToContract(const string contract_id, const string ship_symbol, const string trade_symbol, const int units){
-    json payload;
-    payload["shipSymbol"] = ship_symbol;
-    payload["tradeSymbol"] = trade_symbol;
-    payload["units"] = units;
-    json result = http_post(callsign, "https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/deliver", payload);
-
-    if (result.contains("error")){
-        return result;
-    }
-
-    if (!result["data"]["contract"]["terms"]["deliver"][0]["unitsFulfilled"].is_number_integer()){
-        log("ERROR", "[ERROR] deliverCargoToContract result['data']['contract']['terms']['deliver'][0]['unitsFulfilled'] is not an integer");
-        return result;
-    }
-
-    if (!result["data"]["contract"]["terms"]["deliver"][0]["unitsRequired"].is_number_integer()){
-        log("ERROR", "deliverCargoToContract result['data']['contract']['terms']['deliver'][0]['unitsRequired'] is not an integer");
-        return result;
-    }
-
-    int units_fulfilled = result["data"]["contract"]["terms"]["deliver"][0]["unitsFulfilled"];
-    int units_required = result["data"]["contract"]["terms"]["deliver"][0]["unitsRequired"];
-
-    log("INFO", ship_symbol + " | Delivered " + to_string(units) + " of " + trade_symbol + " [" + to_string(units_fulfilled) + "/" +
-    to_string(units_required) + "]");
-
-    return result["data"];
-}
-
-
 void sellCargo(const string ship_symbol, const string cargo_symbol, const int units){
     json payload;
     payload["symbol"] = cargo_symbol;
@@ -1225,7 +1162,7 @@ void applyRoleHauler(const json &ship_json){
                 // TODO verify this is an array/object before attempting to assign it.
                 const json inventory = ship_json["cargo"]["inventory"];
                 int units = cargoCount(inventory, target_resource);
-                const json deliver_result = deliverCargoToContract(target_contract_id, ship_symbol, target_resource, units);
+                const json deliver_result = deliverCargoToContract(callsign, target_contract_id, ship_symbol, target_resource, units);
                 if (deliver_result.contains("error")){
                     log("ERROR", "applyRoleHauler deliverCargoToContract result contains error. exiting role");
                     return;
@@ -1234,7 +1171,12 @@ void applyRoleHauler(const json &ship_json){
                 // check if the contract can be handed in
                 const json contract_after_delivery = deliver_result["contract"];
                 if (areContractRequirementsMet(contract_after_delivery)){
-                    fulfillContract(target_contract_id);
+                    const json fulfill_result = fulfillContract(callsign, target_contract_id);
+                    if (fulfill_result.contains("contract")){
+                        target_contract = fulfill_result["contract"];
+                    } else {
+                        log("ERROR", "applyRoleHauler fulfillContract result does not contain contract key");
+                    }
                 }
 
                 // sell what remains in the cargo hold after delvering to the contract
@@ -1430,7 +1372,7 @@ int main(int argc, char* argv[])
 
         int calls_per_minute = http_calls / 1.5;
 
-        log("INFO", "HTTP Calls: " + to_string(calls_per_minute) + "/m");
+        //log("INFO", "HTTP Calls: " + to_string(calls_per_minute) + "/m");
 
         // this is arbitary but avoids most cooldown issues, and is easier on the server.
         // eventually ships should pass their cooldown into this.
