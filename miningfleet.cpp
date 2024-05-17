@@ -8,23 +8,19 @@
 #include <unistd.h>   
 #include <curl/curl.h>
 #include "json.hpp"
-#include "auth-file-utils.h"
-
-using json = nlohmann::json;
+#include "log-utils.h"
+#include "just-enough-curl.h"
 
 using namespace std;
+using json = nlohmann::json;
 
 string callsign;
-
-json error_json = {{"error", "default"}};
 
 const string category_wallet = "WALLET | ";
 const string category_survey = "SURVEY | ";
 
 int http_calls = 0;
 
-const int max_retries = 5;
-const int retry_delay = 30;
 const int turn_length = 90;
 
 
@@ -64,207 +60,7 @@ float survey_score_threshold = 0.3;    // command frigate uses this to decide it
 vector <string> resource_keep_list;    // storage for cargoSymbols. everything else gets jettisoned
 json market_data;
 
-// this is needed by libcurl to retrieve data from the HTTP responses the server will send us
-namespace
-{
-    std::size_t callback(
-            const char* in,
-            std::size_t size,
-            std::size_t num,
-            std::string* out)
-    {
-        const std::size_t totalBytes(size * num);
-        out->append(in, totalBytes);
-        return totalBytes;
-    }
-}
 
-// when printing an entire json object is required, this makes it easier on the eyes
-void printJson(json jsonObject){
-    int indent = 4;
-    string pretty_json = jsonObject.dump(indent);
-    cout << pretty_json;
-}
-
-string timestamp(){
-    time_t t = time(nullptr);
-    tm tm = *gmtime(&t);
-    stringstream ss;
-	ss << put_time(&tm, "%Y-%m-%dT%H:%M:%S");
-	return ss.str();
-}
-
-void log(const string level, const string message){
-    cout << timestamp() << " [" << level << "] " << message << endl;
-}
-
-
-
-// wrapper to make libcurl usable enough for what we need
-json http_get(const string endpoint){
-    //cout << "[INFO] Sending GET request to " << endpoint << endl;
-    CURL *curl;
-    CURLcode res;
-
-    curl_global_init(CURL_GLOBAL_ALL);
-
-    /* get a curl handle */
-    curl = curl_easy_init();
-    if(curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
-        struct curl_slist *headers = NULL;
-        headers = curl_slist_append(headers, "Content-Type: application/json");
-        string auth_token_header = "Authorization: Bearer " + readAuthTokenFromFile(callsign + ".token");
-        headers = curl_slist_append(headers, auth_token_header.c_str());
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        long httpCode(0);
-        std::unique_ptr<std::string> httpData(new std::string());
-
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, httpData.get());
-   
-        for (int i = 1; i <= max_retries &&
-            (res = curl_easy_perform(curl)) != CURLE_OK; i++) {
-                cout << "[WARN] HTTP error, retrying..." << endl;
-                sleep(retry_delay);
-        }
-        
-        /* Check for errors */
-        if(res != CURLE_OK){
-          fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-        }
-
-        // populate httpCode for later use
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-        
-        http_calls++;
-
-        // parse the response body into a json object.
-        json output_as_json = json::parse(*httpData);
-
-        if (httpCode != 200 && httpCode != 201){
-            cout << "http_get error: " << endl;
-            cout << *httpData << endl;
-            printJson(output_as_json);
-        }
-
-        //cout << "[DEBUG] curl easy reset" << endl; 
-        curl_easy_reset(curl);
-        curl_easy_cleanup(curl);
-        return output_as_json;
-    }
-    curl_easy_cleanup(curl);
-
-    return error_json;
-}
-
-// libcurl wrapper. payload parameter is optional
-json http_post(const string endpoint, const json payload = {}, const long possible_error = 200){
-    // if payload is null here, bail. since you will at best get some garbage json in return
-    if (payload == error_json){
-        cout << "[ERROR] http_post bailed because bad payload was provided" << endl;
-        return error_json;
-    }
-
-    //cout << "[INFO] Sending POST request to " << endpoint << endl;
-
-    // initialize libcurl
-    CURL *curl;
-    CURLcode res;
-
-    curl_global_init(CURL_GLOBAL_ALL);
-
-    /* get a curl handle */
-    curl = curl_easy_init();
-    if(curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
-        //curl_easy_setopt(curl, CURLOPT_POST, 1L);
-        
-        /* ask libcurl to show us the verbose output */
-        //curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
-
-       // POSTFIELDS 
-       if (payload.empty()){
-           //cout << "[DEBUG] payload is empty" << endl;
-           curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "");
-       } else {
-           //cout << "[DEBUG] payload is not empty" << endl;
-           string payload_as_string = payload.dump();
-           //cout << payload_as_string.c_str() << endl;
-           //long payloadLength = strlen(payload_as_string.c_str());
-           //cout << payloadLength << endl;
-           const char* payload_as_c_string = payload_as_string.c_str();
-           //curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload_as_c_string);
-           curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, payload_as_c_string);
-
-           //curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, payloadLength);
-       }
-
-       // construct the headers according to libcurl
-       struct curl_slist *headers = NULL;
-
-       // everybody needs a Content-Type header
-       headers = curl_slist_append(headers, "Content-Type: application/json");
-
-       // only set bearer if auth file exists. this is to support initial register agent
-       if (doesAuthFileExist(callsign + ".token")){
-           string auth_token_header = "Authorization: Bearer " + readAuthTokenFromFile(callsign + ".token");
-           headers = curl_slist_append(headers, auth_token_header.c_str());
-       }
-
-       // provide curl handle its carefully crafted headers
-       curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-       // this will definitely become 20X 
-       long httpCode(0);
-
-       // prepare a container for returned data
-       std::unique_ptr<std::string> httpData(new std::string());
-
-       // Hook up data handling function.
-       curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
-       curl_easy_setopt(curl, CURLOPT_WRITEDATA, httpData.get());
-   
-       for (int i = 1; i <= max_retries &&
-           (res = curl_easy_perform(curl)) != CURLE_OK; i++) {
-               cout << "[WARN] HTTP error, retrying..." << endl;
-               sleep(retry_delay);
-       }
-
-       /* Check for curl level errors */
-       if(res != CURLE_OK){
-           fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-       }
-
-       http_calls++;
-         
-       // retrieve the http response code
-       curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-       
-       // parse the response body into a json object.
-       json output_as_json = json::parse(*httpData);
-
-       // print entire response body when http return code is non-20X
-       if (httpCode != 200 && httpCode != 201 && httpCode != possible_error){
-           log("ERROR", "http_post() returned non-20X");
-           log("ERROR", "payload: " + payload.dump());
-           log("ERROR", to_string(httpCode));
-           cout << *httpData << endl;
-           printJson(output_as_json);
-       }
-
-       
-
-       // always reset curl handle after use   
-       curl_easy_reset(curl);
-       curl_easy_cleanup(curl);
-
-       // return the whole object and let other methods deal with it
-       return output_as_json; 
-     }
-    curl_easy_cleanup(curl);
-    return error_json;
-}
 
 int priceCheck(const string good_to_check){
 
@@ -390,12 +186,12 @@ void registerAgent(const string callsign, const string faction) {
     json register_agent_json_object = {};
     register_agent_json_object["symbol"] = callsign;
     register_agent_json_object["faction"] = faction;
-    json result = http_post("https://api.spacetraders.io/v2/register", register_agent_json_object);
+    json result = http_post(callsign, "https://api.spacetraders.io/v2/register", register_agent_json_object);
     writeAuthTokenToFile(result["data"]["token"], callsign);
 }
 
 json getAgent(){
-    const json result = http_get("https://api.spacetraders.io/v2/my/agent");
+    const json result = http_get(callsign, "https://api.spacetraders.io/v2/my/agent");
     if (result.contains("data")){
         return result["data"];
     }
@@ -403,7 +199,7 @@ json getAgent(){
 }
 
 json listShips(){
-    const json result = http_get("https://api.spacetraders.io/v2/my/ships?limit=20");
+    const json result = http_get(callsign, "https://api.spacetraders.io/v2/my/ships?limit=20");
     if (result.contains("data")){
   	    return result["data"];
     }
@@ -411,7 +207,7 @@ json listShips(){
 }
 
 json getShip(const string ship_symbol){
-    const json result = http_get("https://api.spacetraders.io/v2/my/ships/" + ship_symbol);
+    const json result = http_get(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol);
     if (result.contains("data")){
         return result["data"];
     }
@@ -419,7 +215,7 @@ json getShip(const string ship_symbol){
 }
 
 json listWaypointsInSystem(const string system_symbol){
-    return http_get("https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints");
+    return http_get(callsign, "https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints");
 }
 
 string shipSymbolFromJson(const json ship_json){
@@ -431,21 +227,20 @@ string shipSymbolFromJson(const json ship_json){
 }
 
 json getContract(const string contract_id){
-    return http_get("https://api.spacetraders.io/v2/my/contracts/" + contract_id);
+    return http_get(callsign, "https://api.spacetraders.io/v2/my/contracts/" + contract_id);
 }
 
 json listContracts(){
-    const json result = http_get("https://api.spacetraders.io/v2/my/contracts");
+    const json result = http_get(callsign, "https://api.spacetraders.io/v2/my/contracts");
     if (!result.contains("data")){
         return result;
     }
-
     return result["data"];
 }
 
 void acceptContract(const string contractId) {
     log("INFO", "Attempting to accept contract" + contractId);
-    http_post("https://api.spacetraders.io/v2/my/contracts/" + contractId + "/accept");
+    http_post(callsign, "https://api.spacetraders.io/v2/my/contracts/" + contractId + "/accept");
 }
 
 bool hasContractBeenAccepted(const json contract_json){
@@ -456,7 +251,7 @@ bool hasContractBeenAccepted(const json contract_json){
 }
 
 string findWaypointByType(const string systemSymbol, const string type){
-    json result = http_get("https://api.spacetraders.io/v2/systems/" + systemSymbol + "/waypoints?type=" + type);
+    json result = http_get(callsign, "https://api.spacetraders.io/v2/systems/" + systemSymbol + "/waypoints?type=" + type);
     if (!result["data"][0]["symbol"].is_string()){
         cout << "[ERROR] findWaypointByType['data'][0]['symbol'] not string" << endl;
         return "ERROR findWaypointByType";
@@ -465,22 +260,21 @@ string findWaypointByType(const string systemSymbol, const string type){
 }
 
 json findWaypointsByTrait(const string system_symbol, const string trait){
-    json result = http_get("https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints?traits=" + trait);
+    json result = http_get(callsign, "https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints?traits=" + trait);
     if (result["data"].is_null()){
-        cout << "[ERROR] findWaypointsByType['data'] is null" << endl;
-        return error_json;
+        log("ERROR", "findWaypointsByType['data'] is null");
+        return result;
+        
     }
     return result["data"];
 }
 
 json getShipyard(const string system_symbol, const string waypoint_symbol){
-    json result = http_get("https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints/" + waypoint_symbol + "/shipyard");
-
-    // inverted to test error_json
+    json result = http_get(callsign, "https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints/" + waypoint_symbol + "/shipyard");
     if (result.contains("error")){
-        return error_json;
+        printJson(result);
+        return result;
     }
-
     return result["data"];
 }
 
@@ -537,7 +331,7 @@ bool isShipAffordable(const string ship_type, const string shipyard_symbol){
 }
 
 json getMarket(const string system_symbol, const string waypoint_symbol){
-    const json result = http_get("https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints/" + waypoint_symbol + "/market");
+    const json result = http_get(callsign, "https://api.spacetraders.io/v2/systems/" + system_symbol + "/waypoints/" + waypoint_symbol + "/market");
     if (!result.contains("data")){
         log("ERROR", "getMarket result does not contain key data");
         return result;
@@ -617,14 +411,14 @@ bool isShipInOrbit(const json &ship_json){
 
 void orbitShip(const string ship_symbol){
     //cout << "[DEBUG] orbitShip " << ship_symbol << endl;
-    const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/orbit");
+    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/orbit");
     const string status = result["data"]["nav"]["status"];
     log("INFO", ship_symbol + " | " + status);
 }
 
 void dockShip(const string ship_symbol){
     //cout << "[DEBUG] dockShip " + ship_symbol << endl;
-    const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/dock");
+    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/dock");
     const string status = result["data"]["nav"]["status"];
     log("INFO", ship_symbol + " | " + status);
 }
@@ -633,7 +427,7 @@ void navigateShip(const string ship_symbol, const string waypoint_symbol){
     //cout << "[DEBUG] navigateShip " + ship_symbol + " to " + waypoint_symbol << endl;
     json payload;
     payload["waypointSymbol"] = waypoint_symbol;
-    const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/navigate", payload);
+    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/navigate", payload);
     const json nav = result["data"]["nav"];
     const string status = nav["status"];
     const string origin_symbol = nav["route"]["origin"]["symbol"];
@@ -644,7 +438,7 @@ void navigateShip(const string ship_symbol, const string waypoint_symbol){
 void createSurvey(const string ship_symbol){
     //log("DEBUG", "createSurvey");
 
-    json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/survey");
+    json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/survey");
 
 	log("INFO", ship_symbol + " | createSurvey");
     
@@ -918,7 +712,7 @@ void jettisonCargo(const string ship_symbol, const string cargo_symbol, const in
     payload["units"] = units;
 
 
-    const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/jettison", payload);
+    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/jettison", payload);
 
     const json cargo = result["data"]["cargo"];
     const int units_after_jettison = cargo["units"];
@@ -938,7 +732,7 @@ json extractResourcesWithSurvey(const string ship_symbol, const json target_surv
 
     //log("DEBUG", "extractResourcesWithSurvey");
 
-    const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/extract/survey", target_survey);
+    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/extract/survey", target_survey);
 
     if (result.contains("error")){
 
@@ -964,7 +758,7 @@ json extractResourcesWithSurvey(const string ship_symbol, const json target_surv
 
 void refuelShip(const string ship_symbol){
     //cout << "[DEBUG] refuelShip " + ship_symbol << endl;
-    const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/refuel");
+    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/refuel");
     const json transaction = result["data"]["transaction"];
     log("INFO", ship_symbol +  " | Refuelled costing " + to_string(transaction["totalPrice"]));
 }
@@ -989,7 +783,7 @@ int cargoRemaining(const json &cargo){
 
 void fulfillContract(const string contract_id){
     log("DEBUG", "fulfillContract");
-    json result = http_post("https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/fulfill");
+    json result = http_post(callsign, "https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/fulfill");
 
     if (result.contains("error")){
         log("ERROR", "fulfillContract returned error");
@@ -1025,7 +819,7 @@ json deliverCargoToContract(const string contract_id, const string ship_symbol, 
     payload["shipSymbol"] = ship_symbol;
     payload["tradeSymbol"] = trade_symbol;
     payload["units"] = units;
-    json result = http_post("https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/deliver", payload);
+    json result = http_post(callsign, "https://api.spacetraders.io/v2/my/contracts/" + contract_id + "/deliver", payload);
 
     if (result.contains("error")){
         return result;
@@ -1057,7 +851,7 @@ void sellCargo(const string ship_symbol, const string cargo_symbol, const int un
     payload["symbol"] = cargo_symbol;
     payload["units"] = units;
 
-    json result = http_post("https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/sell", payload);
+    json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/sell", payload);
     if (result.contains("error")){
         log("ERROR", "sellCargo returned error");
         return;
@@ -1079,7 +873,7 @@ void purchaseShip(const string ship_type, const string waypoint_symbol){
     json payload;
     payload["shipType"] = ship_type;
     payload["waypointSymbol"] = waypoint_symbol;
-    const json result = http_post("https://api.spacetraders.io/v2/my/ships", payload);
+    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships", payload);
     if (result.contains("error")){
         log("ERROR", "purchaseShip returned error");
         return;
@@ -1103,7 +897,7 @@ json transferCargo(const string source_ship_symbol, const string destination_shi
     payload["units"] = units;
     payload["shipSymbol"] = destination_ship_symbol;
 
-    const json result = http_post("https://api.spacetraders.io/v2/my/ships/" + source_ship_symbol + "/transfer", payload, 400);
+    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + source_ship_symbol + "/transfer", payload, 400);
 
     if (!result.contains("data")){
         return result;
