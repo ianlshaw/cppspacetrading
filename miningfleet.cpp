@@ -676,8 +676,6 @@ void jettisonCargo(const string ship_symbol, const string cargo_symbol, const in
 
 json extractResourcesWithSurvey(const string ship_symbol, const json target_survey){
 
-    //log("DEBUG", "extractResourcesWithSurvey");
-
     const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/extract/survey", target_survey);
 
     if (result.contains("error")){
@@ -823,6 +821,7 @@ json transferAllCargo(const string source_ship_symbol, const string destination_
         const string trade_symbol = item["symbol"];
         const int units = item["units"];
 	    const json transfer_result = transferCargo(source_ship_symbol, destination_ship_symbol, trade_symbol, units);
+        http_calls++;
         if (transfer_result.contains("error")) {
             const long error_code = transfer_result["error"]["code"];    
             if (error_code == 4217){
@@ -843,8 +842,8 @@ json transferAllCargo(const string source_ship_symbol, const string destination_
                                                         trade_symbol, 
                                                         destination_available_space);
 
+                http_calls++;
                 const json source_cargo_after_retransfer = retransfer_result["data"]["cargo"];
-
                 sendHaulerToMarket(destination_ship_symbol);
                 return source_cargo_after_retransfer;
             }
@@ -959,8 +958,10 @@ void applyRoleMiner(const json &ship_json){
     if (!isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         if (isShipDocked(ship_json)){
             orbitShip(ship_symbol);
+            http_calls++;
         }
         navigateShip(ship_symbol, asteroid_belt_symbol);
+        http_calls++;
         return;
     }
 
@@ -994,6 +995,9 @@ void applyRoleMiner(const json &ship_json){
 
         // execute mining operation
         const json result = extractResourcesWithSurvey(ship_symbol, active_survey.jsonObject);
+
+        http_calls++;
+
         if (result.contains("error")){
             //log("WARN", "extractResourcesWithSurvey returned error, skipping transfer subroutine.");
             return;
@@ -1005,6 +1009,7 @@ void applyRoleMiner(const json &ship_json){
         // immidiately jettison anything which is not on the resource_keep_list
         if (!isItemWorthKeeping(extracted_resource_symbol)){
             jettisonCargo(ship_symbol, extracted_resource_symbol, extracted_resource_units);
+            http_calls++;
         } else {
             // if theres a transport nearby, we can save a turn by transferring it immidiately.
 			if (isAtLeastOneTransportOnSite()){
@@ -1027,18 +1032,22 @@ void applyRoleSatellite(const json &ship_json){
         if (isShipAtWaypoint(ship_json, surveyor_ship_shipyard_symbol)){
             if (!isShipDocked(ship_json)){
                 dockShip(ship_symbol);
+                http_calls++;
             } 
 
 			if (isShipAffordable("SHIP_SURVEYOR", surveyor_ship_shipyard_symbol)){
             	purchaseShip("SHIP_SURVEYOR", surveyor_ship_shipyard_symbol);
+                http_calls++;
 			}
             return;
 
         } else {
             if (isShipDocked(ship_json)){
                 orbitShip(ship_symbol);
+                http_calls++;
             }
             navigateShip(ship_symbol, surveyor_ship_shipyard_symbol);
+            http_calls++;
             return;
         }
     }
@@ -1048,18 +1057,22 @@ void applyRoleSatellite(const json &ship_json){
         if (isShipAtWaypoint(ship_json, shuttle_ship_shipyard_symbol)){
             if (!isShipDocked(ship_json)){
                 dockShip(ship_symbol);
+                http_calls++;
             }
 
 			if (isShipAffordable("SHIP_LIGHT_SHUTTLE", shuttle_ship_shipyard_symbol)){
             	purchaseShip("SHIP_LIGHT_SHUTTLE", shuttle_ship_shipyard_symbol);
+                http_calls++;
 			}
             return;
 
         } else {
             if (isShipDocked(ship_json)){
                 orbitShip(ship_symbol);
+                http_calls++;
             }
             navigateShip(ship_symbol, shuttle_ship_shipyard_symbol);
+            http_calls++;
             return;
         }
     }
@@ -1069,18 +1082,22 @@ void applyRoleSatellite(const json &ship_json){
         if (isShipAtWaypoint(ship_json, shuttle_ship_shipyard_symbol)){
             if (!isShipDocked(ship_json)){
                 dockShip(ship_symbol);
+                http_calls++;
             }
 
 			if (isShipAffordable("SHIP_LIGHT_HAULER", shuttle_ship_shipyard_symbol)){
             	purchaseShip("SHIP_LIGHT_HAULER", shuttle_ship_shipyard_symbol);
+                http_calls++;
 			}
             return;
 
         } else {
             if (isShipDocked(ship_json)){
                 orbitShip(ship_symbol);
+                http_calls++;
             }
             navigateShip(ship_symbol, shuttle_ship_shipyard_symbol);
+            http_calls++;
             return;
         }
     }
@@ -1091,17 +1108,21 @@ void applyRoleSatellite(const json &ship_json){
         if (isShipAtWaypoint(ship_json, mining_ship_shipyard_symbol)){
             if (!isShipDocked(ship_json)){
                 dockShip(ship_symbol);
+                http_calls++;
             }
 
              if (isShipAffordable("SHIP_MINING_DRONE", mining_ship_shipyard_symbol)){
                  purchaseShip("SHIP_MINING_DRONE", mining_ship_shipyard_symbol);
+                 http_calls++;
              }
 
         } else {
             if (isShipDocked(ship_json)){
                 orbitShip(ship_symbol);
+                http_calls++;
             }
             navigateShip(ship_symbol, mining_ship_shipyard_symbol);
+            http_calls++;
             return;
         }
     }
@@ -1138,6 +1159,7 @@ void applyRoleHauler(const json &ship_json){
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol) && isShipCargoHoldFull(cargo)){
         log("INFO", ship_symbol + " | Cargo full. Heading to market, boss.");
         navigateShip(ship_symbol, delivery_waypoint_symbol);
+        http_calls++;
 		removeTransportFromOnSiteVector(ship_symbol);
         return;
     }
@@ -1148,10 +1170,13 @@ void applyRoleHauler(const json &ship_json){
         if (!isShipCargoHoldEmpty(cargo)){
             // dock if we arent already
             if (!isShipDocked(ship_json)){
-                dockShip(ship_symbol); 
+                dockShip(ship_symbol);
+                http_calls++; 
             }
             refuelShip(ship_symbol);
+            http_calls++;
             updateMarketData();
+            http_calls++;
             if (!market_data.is_null()){
 			    scoreSurveysForProfitability();
             }
@@ -1163,6 +1188,7 @@ void applyRoleHauler(const json &ship_json){
                 const json inventory = ship_json["cargo"]["inventory"];
                 int units = cargoCount(inventory, target_resource);
                 const json deliver_result = deliverCargoToContract(callsign, target_contract_id, ship_symbol, target_resource, units);
+                http_calls++;
                 if (deliver_result.contains("error")){
                     log("ERROR", "applyRoleHauler deliverCargoToContract result contains error. exiting role");
                     return;
@@ -1172,6 +1198,7 @@ void applyRoleHauler(const json &ship_json){
                 const json contract_after_delivery = deliver_result["contract"];
                 if (areContractRequirementsMet(contract_after_delivery)){
                     const json fulfill_result = fulfillContract(callsign, target_contract_id);
+                    http_calls++;
                     if (fulfill_result.contains("contract")){
                         target_contract = fulfill_result["contract"];
                     } else {
@@ -1185,10 +1212,13 @@ void applyRoleHauler(const json &ship_json){
                     string cargo_symbol = item["symbol"];
                     int units = cargoCount(post_deliver_inventory, cargo_symbol);
                     sellCargo(ship_symbol, cargo_symbol, units);
+                    http_calls++;
                 }
                 // once everything is sold, head back to the belt
                 orbitShip(ship_symbol);
+                http_calls++;
                 navigateShip(ship_symbol, asteroid_belt_symbol);
+                http_calls++;
                 return;
             } else {
                 // contract is fulfilled, sell everything
@@ -1197,10 +1227,13 @@ void applyRoleHauler(const json &ship_json){
                     string cargo_symbol = item["symbol"];
                     int units = cargoCount(inventory, cargo_symbol);
                     sellCargo(ship_symbol, cargo_symbol, units);
+                    http_calls++;
                 }
                 // once everything is sold, head back to the belt
                 orbitShip(ship_symbol);
+                http_calls++;
                 navigateShip(ship_symbol, asteroid_belt_symbol);
+                http_calls++;
                 return;
             }
         } 
@@ -1209,8 +1242,10 @@ void applyRoleHauler(const json &ship_json){
     if (!isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         if (isShipDocked(ship_json)){
             orbitShip(ship_symbol);
+            http_calls++;
         }
         navigateShip(ship_symbol, asteroid_belt_symbol);
+        http_calls++;
     }
 }
 
@@ -1299,11 +1334,13 @@ void shipRoleApplicator(const json &ship_json){
         // this therefore ensures their cargo reports and locations/status are accurate when their roles are applied
         if (role == "TRANSPORT"){
             const json transport_ship_json = getShip(ship_symbol);
+            http_calls++;
             applyRoleTransport(transport_ship_json);
             return;
         }
         if (role == "HAULER"){
             const json transport_ship_json = getShip(ship_symbol);
+            http_calls++;
             applyRoleHauler(transport_ship_json);
             return;
         }
@@ -1372,7 +1409,7 @@ int main(int argc, char* argv[])
 
         int calls_per_minute = http_calls / 1.5;
 
-        //log("INFO", "HTTP Calls: " + to_string(calls_per_minute) + "/m");
+        log("INFO", "HTTP Calls: " + to_string(calls_per_minute) + "/m");
 
         // this is arbitary but avoids most cooldown issues, and is easier on the server.
         // eventually ships should pass their cooldown into this.
