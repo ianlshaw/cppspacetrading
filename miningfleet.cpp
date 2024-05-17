@@ -157,7 +157,6 @@ survey bestSurveyForProfiteering(){
 
 // until this is true, we do not want to sell the target_resource
 bool isContractFulfilled(const json &contract_json){
-    //cout << "[DEBUG] isContractFulfilled" << endl;
     if (contract_json["fulfilled"].is_boolean()){
         return contract_json["fulfilled"];
     }
@@ -181,7 +180,7 @@ void registerAgent(const string callsign, const string faction) {
         return;
     }
 
-    cout << "[INFO] Attempting to register new agent " << callsign << endl;
+    log("INFO", "Attempting to register new agent " + callsign);
 
     json register_agent_json_object = {};
     register_agent_json_object["symbol"] = callsign;
@@ -253,7 +252,7 @@ bool hasContractBeenAccepted(const json contract_json){
 string findWaypointByType(const string systemSymbol, const string type){
     json result = http_get(callsign, "https://api.spacetraders.io/v2/systems/" + systemSymbol + "/waypoints?type=" + type);
     if (!result["data"][0]["symbol"].is_string()){
-        cout << "[ERROR] findWaypointByType['data'][0]['symbol'] not string" << endl;
+        log("ERROR", "findWaypointByType['data'][0]['symbol'] not string");
         return "ERROR findWaypointByType";
     }
     return result["data"][0]["symbol"];
@@ -283,15 +282,12 @@ string findShipyardByShipType(const string ship_type){
     json shipyard_waypoints = findWaypointsByTrait(system_symbol, "SHIPYARD"); 
 
     for (json waypoint : shipyard_waypoints) {
-        //cout << "[DEBUG] for (json waypoint : shipyard_waypoints)" << endl;
         string waypoint_symbol = waypoint["symbol"];
         json shipyard = getShipyard(system_symbol, waypoint_symbol);
         json ship_types = shipyard["shipTypes"];
         for (json available_ship_type : ship_types){
-            //cout << "[DEBUG] for (json available_ship_type : ship_types)" << endl;
             string type = available_ship_type["type"];
             if (type == ship_type){
-                //cout << "[DEBUG] (type == ship_type)" << endl;
                 return waypoint_symbol;
             }
         }
@@ -379,7 +375,7 @@ bool isShipDocked(const json &ship_json){
     if (ship_json["nav"]["status"].is_string()) {
         return (ship_json["nav"]["status"] == "DOCKED" ? true : false);
     } else {
-        cout << "[ERROR] isShipDocked ship_json['nav]['status'] is not string" << endl;
+        log("ERROR", "isShipDocked ship_json['nav]['status'] is not string");
         return false;
     }
 }
@@ -404,27 +400,24 @@ bool isShipInOrbit(const json &ship_json){
     if (ship_json["nav"]["status"].is_string()) { 
         return (ship_json["nav"]["status"] == "IN_ORBIT" ? true : false);
     } else {
-        cout << "[ERROR] isShipInOrbit ship_json['nav']['status'] not string" << endl;
+        log("ERROR", "isShipInOrbit ship_json['nav']['status'] not string");
         return false;
     }
 }
 
 void orbitShip(const string ship_symbol){
-    //cout << "[DEBUG] orbitShip " << ship_symbol << endl;
     const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/orbit");
     const string status = result["data"]["nav"]["status"];
     log("INFO", ship_symbol + " | " + status);
 }
 
 void dockShip(const string ship_symbol){
-    //cout << "[DEBUG] dockShip " + ship_symbol << endl;
     const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/dock");
     const string status = result["data"]["nav"]["status"];
     log("INFO", ship_symbol + " | " + status);
 }
 
 void navigateShip(const string ship_symbol, const string waypoint_symbol){
-    //cout << "[DEBUG] navigateShip " + ship_symbol + " to " + waypoint_symbol << endl;
     json payload;
     payload["waypointSymbol"] = waypoint_symbol;
     const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/navigate", payload);
@@ -501,9 +494,8 @@ bool isShipCargoHoldEmpty(const json &cargo){
 }
 
 bool isShipAtWaypoint(const json &ship_json, string waypoint_symbol){
-    //cout << "[DEBUG] isShipAtWaypoint" << endl;
     if (!ship_json["nav"]["waypointSymbol"].is_string()){
-        cout << "[ERROR] ship_json['nav']['waypointSymbol'] not string" << endl;
+        log("ERROR", "ship_json['nav']['waypointSymbol'] not string");
     }
     return (ship_json["nav"]["waypointSymbol"] == waypoint_symbol ? true : false);
 }
@@ -514,10 +506,8 @@ bool isSurveyListEmpty(){
 }
 
 bool isSurveyExpired(const json survey){
-    //cout << "[DEBUG] isSurveyExpired" << endl;
 
     const string expiration = survey["expiration"];
-    //cout << "[DEBUG] expiration string: " << expiration << endl;
 
     tm expiration_time_handle{};
     istringstream expiration_string_stream(expiration);
@@ -530,7 +520,6 @@ bool isSurveyExpired(const json survey){
     }   
 
     time_t expiration_timestamp = mktime(&expiration_time_handle);
-    //cout << "[DEBUG] expiration_timestamp: " << expiration_timestamp << endl;
 
     // time now
     time_t current_timestamp = time(NULL);
@@ -540,11 +529,9 @@ bool isSurveyExpired(const json survey){
 
     // convert it back into a time_t for subsequent comparison
     time_t utc_time_now_timestamp = mktime(utc_time_now);
-    //cout << "[DEBUG] utc_time_now_timestamp = " << utc_time_now_timestamp << endl;
 
     // find the difference between the utc time now and surveys expiration
     double seconds_until_expiry = difftime(expiration_timestamp, utc_time_now_timestamp);
-    //cout << "[DEBUG] Seconds until expiry: " << seconds_until_expiry << endl;
 
     return (seconds_until_expiry <= 30 ? true : false);
 }
@@ -648,7 +635,6 @@ void sendHaulerToMarket(const string ship_symbol){
 }
 
 void removeExpiredSurveys(){
-    //cout << "[DEBUG] removeExpiredSurveys" << endl;
     int vector_index = 0;
     while(vector_index < surveys.size()){
         survey each_survey = surveys.at(vector_index);
@@ -757,18 +743,14 @@ json extractResourcesWithSurvey(const string ship_symbol, const json target_surv
 }
 
 void refuelShip(const string ship_symbol){
-    //cout << "[DEBUG] refuelShip " + ship_symbol << endl;
     const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/refuel");
     const json transaction = result["data"]["transaction"];
     log("INFO", ship_symbol +  " | Refuelled costing " + to_string(transaction["totalPrice"]));
 }
 
-int cargoCount(const json inventory, const string cargo_symbol){
-    //cout << "[DEBUG] cargoCount " + cargo_symbol << endl;
-    
+int cargoCount(const json inventory, const string cargo_symbol){    
     for (json item: inventory){
         if (item["symbol"] == cargo_symbol){
-            //cout << "[DEBUG] " << item["units"] << " of " << cargo_symbol << endl;
             return item["units"];
         }
     }
@@ -814,7 +796,6 @@ void fulfillContract(const string contract_id){
 }
 
 json deliverCargoToContract(const string contract_id, const string ship_symbol, const string trade_symbol, const int units){
-    //cout << "[DEBUG] deliverCargoToContract " << endl; 
     json payload;
     payload["shipSymbol"] = ship_symbol;
     payload["tradeSymbol"] = trade_symbol;
@@ -846,7 +827,6 @@ json deliverCargoToContract(const string contract_id, const string ship_symbol, 
 
 
 void sellCargo(const string ship_symbol, const string cargo_symbol, const int units){
-    //cout << "[DEBUG] sellCargo " << ship_symbol << " " << cargo_symbol << " " << units << endl;
     json payload;
     payload["symbol"] = cargo_symbol;
     payload["units"] = units;
@@ -1005,7 +985,6 @@ int countShipsByRole(const json &ship_list, const string role){
 
 // only once this is true should we attempt to fulfill the contract
 bool areContractRequirementsMet(const json contract_json){
-    //cout << "[DEBUG] areContractRequirementsMet" << endl;
     if (contract_json["terms"]["deliver"][0]["unitsFulfilled"].is_number_integer() &&
         contract_json["terms"]["deliver"][0]["unitsRequired"].is_number_integer()){
             const int units_fulfilled = contract_json["terms"]["deliver"][0]["unitsFulfilled"];
@@ -1022,13 +1001,11 @@ bool areContractRequirementsMet(const json contract_json){
 
 // ships with this role should go to the asteroid belt and survey for the contract's target resource over and over.
 void applyRoleSurveyor(const json &ship_json){
-    //cout << "[DEBUG] applyRoleSurveyor" << endl;
 
     if (!ship_json["symbol"].is_string()){
-        cout << "[ERROR] applyRoleSurveyor ship_json['symbol'] not a string" << endl;
+        log("ERROR", "applyRoleSurveyor ship_json['symbol'] not a string");
         return;
     }
-
 
     const string ship_symbol = ship_json["symbol"];
 
@@ -1036,8 +1013,6 @@ void applyRoleSurveyor(const json &ship_json){
     if (isShipInTransit(ship_json)){
         return;
     }
-
-    //cout << "[DEBUG] ship_symbol = " << ship_symbol << endl;
 
     if (isShipAtWaypoint(ship_json, asteroid_belt_symbol)){
         // TODO: move this into isShipAtWaypoint
@@ -1068,18 +1043,15 @@ void applyRoleSurveyor(const json &ship_json){
 // then they should head to the marketplace, deliver contract goods sell everything else
 // once the contract is complete, they should sell everything.
 void applyRoleMiner(const json &ship_json){
-    //cout << "[DEBUG] applyRoleMiner" << endl;
 
     if (!ship_json["symbol"].is_string()){
-        cout << "[ERROR] applyRoleMiner ship_json['symbol'] is not a string" << endl;
+        log("ERROR", "applyRoleMiner ship_json['symbol'] is not a string");
         return;
     }
 
     const string ship_symbol = ship_json["symbol"];
 
     json cargo = ship_json["cargo"];
-
-    //cout << "[DEBUG] " << ship_symbol << " applyRoleMiner" << endl;
 
     // if ship is currently travelling, dont waste any further cycles.
     if (isShipInTransit(ship_json)){
@@ -1378,7 +1350,6 @@ void commandShipRoleDecider(const json &ship_json){
 }
 
 void shipRoleApplicator(const json &ship_json){
-    //cout << "[DEBUG] shipRoleApplicator" << endl;
     if (ship_json.is_null()){
         log("ERROR", "shipRoleApplicator ship_json is null");
         return;
@@ -1443,7 +1414,7 @@ int main(int argc, char* argv[])
     // once, at the start of the run.
 
     if (argc != 3){
-        cout << "./miningfleet CALLSIGN FACTION" << endl;
+        log("ERROR", "./miningfleet CALLSIGN FACTION");
         exit(1);
     }
 
