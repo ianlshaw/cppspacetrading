@@ -10,6 +10,7 @@
 #include "json.hpp"
 #include "log-utils.h"
 #include "just-enough-curl.h"
+#include "tvrj-spacetradersapi-sdk.h"
 
 using namespace std;
 using json = nlohmann::json;
@@ -173,30 +174,6 @@ bool haveEnoughCredits(const int price){
     return(credits > price ? true : false);
 }
 
-void registerAgent(const string callsign, const string faction) {
-
-    // we don't want to ever accidently overwrite a .token file
-    if (doesAuthFileExist(callsign + ".token")) {
-        return;
-    }
-
-    log("INFO", "Attempting to register new agent " + callsign);
-
-    json register_agent_json_object = {};
-    register_agent_json_object["symbol"] = callsign;
-    register_agent_json_object["faction"] = faction;
-    json result = http_post(callsign, "https://api.spacetraders.io/v2/register", register_agent_json_object);
-    writeAuthTokenToFile(result["data"]["token"], callsign);
-}
-
-json getAgent(){
-    const json result = http_get(callsign, "https://api.spacetraders.io/v2/my/agent");
-    if (result.contains("data")){
-        return result["data"];
-    }
-    return result;
-}
-
 json listShips(){
     const json result = http_get(callsign, "https://api.spacetraders.io/v2/my/ships?limit=20");
     if (result.contains("data")){
@@ -309,7 +286,7 @@ int howMuchDoesShipCost(const string ship_type, const string shipyard_waypoint_s
 
 bool isShipAffordable(const string ship_type, const string shipyard_symbol){
 	// can i afford SHIP SURVEYOR from surveyor_ship_shipyard_symbol
-	const json agent = getAgent();
+	const json agent = getAgent(callsign);
 	update_credits(agent["credits"]);
 	
 	int ship_price = howMuchDoesShipCost(ship_type, shipyard_symbol);
