@@ -643,6 +643,27 @@ int cargoRemaining(const json &cargo){
     return capacity - units;
 }
 
+int inventoryValue(const json &market_data, const json &inventory){
+    if (market_data.is_null()){
+        log("WARN", "inventoryValue cannot execute because market_data is null.");
+        return 0;
+    }
+
+    int total_value = 0;
+    for(json inventory_item : inventory){
+        for(json market_data_item : market_data["tradeGoods"]){
+            if (inventory_item["symbol"] == market_data_item["symbol"]){
+                int sellPrice = market_data_item["sellPrice"];
+                int units = inventory_item["units"];
+                int instrument_total = sellPrice * units;
+                total_value = total_value + instrument_total;
+            }
+        }
+    }
+    log("INFO", "inventoryValue " + to_string(total_value));
+    return total_value;
+}
+
 void sellCargo(const string ship_symbol, const string cargo_symbol, const int units){
     json payload;
     payload["symbol"] = cargo_symbol;
@@ -900,6 +921,8 @@ void applyRoleMiner(const json &ship_json){
         }
 
         // execute mining operation
+        log("DEBUG", "active_survey.marketValue: " + to_string(active_survey.marketValue));
+
         const json result = extractResourcesWithSurvey(ship_symbol, active_survey.jsonObject);
 
         http_calls++;
@@ -1083,6 +1106,9 @@ void applyRoleHauler(const json &ship_json){
             http_calls++;
             updateMarketData();
             http_calls++;
+
+            inventoryValue(market_data, cargo["inventory"]);
+
             if (!market_data.is_null()){
 			    scoreSurveysForProfitability();
             }
