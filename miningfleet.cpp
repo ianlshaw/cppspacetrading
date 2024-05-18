@@ -127,8 +127,6 @@ class survey {
 vector <survey> surveys; // Storage for the surveys we will create
 survey active_survey;        // Json object for the survey with the highest score
 
-//TODO remove this 
-
 survey bestSurveyForTargetFarming(){
     float best_score = 0;
     survey best_survey;
@@ -630,12 +628,6 @@ json extractResourcesWithSurvey(const string ship_symbol, const json target_surv
     return result["data"];
 }
 
-void refuelShip(const string ship_symbol){
-    const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/refuel");
-    const json transaction = result["data"]["transaction"];
-    log("INFO", ship_symbol +  " | Refuelled costing " + to_string(transaction["totalPrice"]));
-}
-
 int cargoCount(const json inventory, const string cargo_symbol){    
     for (json item: inventory){
         if (item["symbol"] == cargo_symbol){
@@ -1026,8 +1018,8 @@ void applyRoleSatellite(const json &ship_json){
             }
 
              if (isShipAffordable("SHIP_MINING_DRONE", mining_ship_shipyard_symbol)){
-                 purchaseShip(callsign, "SHIP_MINING_DRONE", mining_ship_shipyard_symbol);
-                 http_calls++;
+                purchaseShip(callsign, "SHIP_MINING_DRONE", mining_ship_shipyard_symbol);
+                http_calls++;
              }
 
         } else {
@@ -1087,7 +1079,7 @@ void applyRoleHauler(const json &ship_json){
                 dockShip(callsign, ship_symbol);
                 http_calls++; 
             }
-            refuelShip(ship_symbol);
+            refuelShip(callsign, ship_symbol);
             http_calls++;
             updateMarketData();
             http_calls++;
