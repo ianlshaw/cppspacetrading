@@ -281,10 +281,24 @@ void navigateShip(const string callsign, const string ship_symbol, const string 
 // Scan Ships
 
 // Refuel Ship
-void refuelShip(const string callsign, const string ship_symbol){
+json refuelShip(const string callsign, const string ship_symbol){
     const json result = http_post(callsign, "https://api.spacetraders.io/v2/my/ships/" + ship_symbol + "/refuel");
-    const json transaction = result["data"]["transaction"];
-    log("INFO", ship_symbol +  " | Refuelled costing " + to_string(transaction["totalPrice"]));
+    if (result.contains("error")){
+        return result;
+    }
+
+    if (result.contains("data")){
+        if (result["data"].contains("transaction")){
+                const json transaction = result["data"]["transaction"];
+                log("INFO", ship_symbol +  " | Refuelled costing " + to_string(transaction["totalPrice"]));
+        }
+        return result["data"];
+    }
+
+    log("ERROR", "refuelShip response did not contain either data or error key. Big problem!");
+
+    return result;
+    
 }
 
 // Purchase Cargo
