@@ -36,6 +36,8 @@ float number_of_haulers = 0;
 const float desired_hauler_to_miner_ratio = 0.08;
 const float desired_surveyor_to_miner_ratio = 0.08;
 
+const int desired_credits_per_cargo_unit = 50;
+
 float hauler_to_miner_ratio = 0.0;
 float surveyor_to_miner_ratio = 0.0;
 
@@ -664,6 +666,14 @@ int inventoryValue(const json &market_data, const json &inventory){
     return total_value;
 }
 
+int creditsPerCargoUnit(const json &market_data, const json &cargo){
+    const json inventory = cargo["inventory"];
+    int inventory_value = inventoryValue(market_data, inventory);
+    int units = cargo["units"];
+    log("DEBUG", "creditsPerCargoUnit: " + to_string(inventory_value / units));
+    return inventory_value / units;
+}
+
 void sellCargo(const string ship_symbol, const string cargo_symbol, const int units){
     json payload;
     payload["symbol"] = cargo_symbol;
@@ -921,7 +931,11 @@ void applyRoleMiner(const json &ship_json){
         }
 
         // execute mining operation
-        log("DEBUG", "active_survey.marketValue: " + to_string(active_survey.marketValue));
+        if (isContractFulfilled(target_contract)){
+            log("INFO", ship_symbol + " | active_survey.marketValue: " + to_string(active_survey.marketValue));
+        } else {
+            log("INFO", ship_symbol + " | active_survey.targetResourcePercentage: " + to_string(active_survey.targetResourcePercentage));
+        }
 
         const json result = extractResourcesWithSurvey(ship_symbol, active_survey.jsonObject);
 
@@ -1102,12 +1116,13 @@ void applyRoleHauler(const json &ship_json){
                 dockShip(callsign, ship_symbol);
                 http_calls++; 
             }
-            refuelShip(callsign, ship_symbol);
-            http_calls++;
+
             updateMarketData();
             http_calls++;
 
-            inventoryValue(market_data, cargo["inventory"]);
+            int credits_per_cargo_unit = creditsPerCargoUnit(market_data, cargo);
+
+
 
             if (!market_data.is_null()){
 			    scoreSurveysForProfitability();
@@ -1147,12 +1162,21 @@ void applyRoleHauler(const json &ship_json){
                     http_calls++;
                 }
                 // once everything is sold, head back to the belt
+                // Only do this if its needed
+                refuelShip(callsign, ship_symbol);
+                http_calls++;
                 orbitShip(callsign, ship_symbol);
                 http_calls++;
                 navigateShip(callsign, ship_symbol, asteroid_belt_symbol);
                 http_calls++;
                 return;
             } else {
+
+                if (credits_per_cargo_unit < desired_credits_per_cargo_unit){
+                    log("INFO", "Credits per cargo unit too low, gonna wait till the price recovers, boss.");
+                    return;
+                }
+
                 // contract is fulfilled, sell everything
                 const json inventory = ship_json["cargo"]["inventory"];
                 for (json item: inventory){
@@ -1162,6 +1186,9 @@ void applyRoleHauler(const json &ship_json){
                     http_calls++;
                 }
                 // once everything is sold, head back to the belt
+                // Only do this if its needed
+                refuelShip(callsign, ship_symbol);
+                http_calls++;
                 orbitShip(callsign, ship_symbol);
                 http_calls++;
                 navigateShip(callsign, ship_symbol, asteroid_belt_symbol);
