@@ -646,16 +646,39 @@ int cargoRemaining(const json &cargo){
 }
 
 int inventoryValue(const json &market_data, const json &inventory){
-    if (market_data.is_null()){
-        log("WARN", "inventoryValue cannot execute because market_data is null.");
+    if (!market_data.is_object()){
+        log("ERROR", "inventoryValue market_data is not an object");
         return 0;
     }
-
+    if(!inventory.is_array()){
+        log("ERROR", "inventoryValue inventory is not an array");
+        return 0;
+    }
+    if(!market_data["tradeGoods"].is_array()){
+        log("ERROR", "inventoryValue market_data['tradeGoods'] is not an array");
+        return 0;
+    }
     int total_value = 0;
     for(json inventory_item : inventory){
         for(json market_data_item : market_data["tradeGoods"]){
+            if(!inventory_item["symbol"].is_string()){
+                log("ERROR", "inventoryValue inventory_item['symbol'] is not a string");
+                return 0;
+            }
+            if(!market_data_item["symbol"].is_string()){
+                log("ERROR", "inventoryValue market_data_item['symbol'] is not a string");
+                return 0;
+            }
             if (inventory_item["symbol"] == market_data_item["symbol"]){
+                if(!market_data_item["sellPrice"].is_number_integer()){
+                    log("ERROR", "inventoryValue market_data_item['sellPrice] is not an integer");
+                    return 0;
+                }
                 int sellPrice = market_data_item["sellPrice"];
+                if(!inventory_item["units"].is_number_integer()){
+                    log("ERROR", "inventoryValue inventory_item['units'] is not an integer");
+                    return 0;
+                }
                 int units = inventory_item["units"];
                 int instrument_total = sellPrice * units;
                 total_value = total_value + instrument_total;
@@ -667,10 +690,21 @@ int inventoryValue(const json &market_data, const json &inventory){
 }
 
 int creditsPerCargoUnit(const json &market_data, const json &cargo){
+    if(!market_data.is_object()){
+        log("ERROR", "creditsPerCargoUnit market_data is not an object");
+        return 0;
+    }
+    if (!cargo["inventory"].is_array()){
+        log("ERROR", "creditsPerCargoUnit cargo['inventory'] is not an array");
+        return 0;
+    }
     const json inventory = cargo["inventory"];
     int inventory_value = inventoryValue(market_data, inventory);
+    if (!cargo["units"].is_number_integer()){
+        log("ERROR", "creditsPerCargoUnit cargo['units'] is not an integer");
+    }
     int units = cargo["units"];
-    log("DEBUG", "creditsPerCargoUnit: " + to_string(inventory_value / units));
+    log("INFO", "creditsPerCargoUnit: " + to_string(inventory_value / units));
     return inventory_value / units;
 }
 
