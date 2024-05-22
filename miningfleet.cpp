@@ -32,6 +32,9 @@ float number_of_surveyor_ships = 0;
 float number_of_mining_ships = 0;
 float number_of_shuttles = 0;
 float number_of_haulers = 0;
+float number_of_satellites = 0;
+
+const float desired_number_of_satellites = 2;
 
 const float desired_hauler_to_miner_ratio = 0.08;
 const float desired_surveyor_to_miner_ratio = 0.08;
@@ -41,12 +44,14 @@ const int desired_credits_per_cargo_unit = 50;
 float hauler_to_miner_ratio = 0.0;
 float surveyor_to_miner_ratio = 0.0;
 
+bool buyer_satellite_exists = false;
+
 vector <string> transports_on_site;
 
 int credits = 0;
 
 
-string system_symbol;
+string current_system_symbol;
 json contracts_list;
 json system_waypoints_list;
 json target_contract;
@@ -54,6 +59,7 @@ string target_resource;
 string target_contract_id;
 string asteroid_belt_symbol;
 string delivery_waypoint_symbol;
+string satellite_shipyard_symbol;
 string mining_ship_shipyard_symbol;
 string surveyor_ship_shipyard_symbol;
 string shuttle_ship_shipyard_symbol;
@@ -61,7 +67,7 @@ string light_hauler_shipyard_symbol;
 
 float survey_score_threshold = 0.3;    // command frigate uses this to decide its role
 vector <string> resource_keep_list;    // storage for cargoSymbols. everything else gets jettisoned
-json market_data;
+json cached_market_data;
 
 
 
@@ -69,7 +75,8 @@ int priceCheck(const string good_to_check){
 
     //log("DEBUG", "priceCheck " + good_to_check);
 
-    json trade_goods = market_data["tradeGoods"];
+    // TODO: Make market data an argument, remove global.
+    json trade_goods = cached_market_data["tradeGoods"];
     for (json market_good: trade_goods){
         if (good_to_check == market_good["symbol"]){ 
             //log("DEBUG", to_string(market_good["sellPrice"]));
@@ -223,11 +230,11 @@ json getShipyard(const string system_symbol, const string waypoint_symbol){
 
 string findShipyardByShipType(const string ship_type){
     //log("DEBUG", "findShipyardByShipType " + ship_type);
-    json shipyard_waypoints = findWaypointsByTrait(system_symbol, "SHIPYARD"); 
+    json shipyard_waypoints = findWaypointsByTrait(current_system_symbol, "SHIPYARD"); 
 
     for (json waypoint : shipyard_waypoints) {
         string waypoint_symbol = waypoint["symbol"];
-        json shipyard = getShipyard(system_symbol, waypoint_symbol);
+        json shipyard = getShipyard(current_system_symbol, waypoint_symbol);
         json ship_types = shipyard["shipTypes"];
         for (json available_ship_type : ship_types){
             string type = available_ship_type["type"];
@@ -240,7 +247,7 @@ string findShipyardByShipType(const string ship_type){
 }
 
 int howMuchDoesShipCost(const string ship_type, const string shipyard_waypoint_symbol){
-	const json get_shipyard_result = getShipyard(system_symbol, shipyard_waypoint_symbol);
+	const json get_shipyard_result = getShipyard(current_system_symbol, shipyard_waypoint_symbol);
 	json ships = get_shipyard_result["ships"];
 	for(json ship: ships){
 		if (ship_type == ship["type"]){
@@ -291,10 +298,12 @@ void initializeGlobals(){
     log("INFO", "survey_score_threshold: " + to_string(survey_score_threshold));
     log("INFO", "contract_fulfilled = " + to_string(target_contract["fulfilled"]));
     json first_ship = getShip(callsign, callsign + "-1");
-    system_symbol = first_ship["nav"]["systemSymbol"];
-    system_waypoints_list = listWaypointsInSystem(system_symbol);
-    asteroid_belt_symbol = findWaypointByType(system_symbol, "ENGINEERED_ASTEROID"); 
+    current_system_symbol = first_ship["nav"]["systemSymbol"];
+    system_waypoints_list = listWaypointsInSystem(current_system_symbol);
+    asteroid_belt_symbol = findWaypointByType(current_system_symbol, "ENGINEERED_ASTEROID"); 
     delivery_waypoint_symbol = target_contract["terms"]["deliver"][0]["destinationSymbol"];
+    satellite_shipyard_symbol = findShipyardByShipType("SHIP_PROBE");
+    log("INFO", "satellite_shipyard_symbol = " + satellite_shipyard_symbol);
     surveyor_ship_shipyard_symbol = findShipyardByShipType("SHIP_SURVEYOR");
     log("INFO", "surveyor_ship_shipyard_symbol = " + surveyor_ship_shipyard_symbol);
     mining_ship_shipyard_symbol = findShipyardByShipType("SHIP_MINING_DRONE");
@@ -305,7 +314,7 @@ void initializeGlobals(){
     log("INFO", "light_hauler_shipyard_symbol = " + light_hauler_shipyard_symbol);
 
 
-    json get_market_result = getMarket(system_symbol, delivery_waypoint_symbol);
+    json get_market_result = getMarket(current_system_symbol, delivery_waypoint_symbol);
     json imports = get_market_result["imports"];
     for (json an_import : imports){
         string import_symbol = an_import["symbol"];
@@ -373,7 +382,7 @@ bool isSurveyGoodEnough(const survey survey_to_test){
 
     float score;
 
-    if (isContractFulfilled(target_contract) && !market_data.is_null()){
+    if (isContractFulfilled(target_contract) && !cached_market_data.is_null()){
         score = survey_to_test.marketValue;
     } else {
         score = survey_to_test.targetResourcePercentage;
@@ -475,7 +484,7 @@ void promoteBestSurveyForProfitability(){
 
 void promoteBestSurvey(){
     //log("DEBUG", "promoteBestSurvey");
-    if (isContractFulfilled(target_contract) && !market_data.is_null()){
+    if (isContractFulfilled(target_contract) && !cached_market_data.is_null()){
         promoteBestSurveyForProfitability();
     } else {
     // by default we farm for target_resource
@@ -504,7 +513,7 @@ void scoreSurveysForProfitability(){
 
 	//log("DEBUG", "scoreSurveysForProfitability");
 
-	if (market_data.is_null()){
+	if (cached_market_data.is_null()){
 		log("ERROR", "market_data is null");
         return;
 	}
@@ -637,6 +646,30 @@ int cargoCount(const json inventory, const string cargo_symbol){
         }
     }
     return 0;
+}
+
+int tradeVolumeOf(const json &market_data, const string cargo_symbol){
+    int tradeVolume;
+    if (!market_data["tradeGoods"].is_array()){
+        log("ERROR", "market_data is not an array");
+        return 0;
+    }
+    
+    for(json tradeGood : market_data["tradeGoods"]){
+        if (!tradeGood["symbol"].is_string()){
+            log("ERROR", "tradeGood['symbol'] is not a string");
+            return 0;
+        }
+        const string trade_good_symbol = tradeGood["symbol"];
+        if (trade_good_symbol == cargo_symbol){
+            if (!tradeGood["tradeVolume"].is_number_integer()){
+                log("ERROR", "tradeGood['tradeVolume'] is not an integer");
+                return 0;
+            }
+            tradeVolume = tradeGood["tradeVolume"];
+        }
+    }
+    return tradeVolume;
 }
 
 int cargoRemaining(const json &cargo){
@@ -828,14 +861,14 @@ json transferAllCargo(const string source_ship_symbol, const string destination_
 void updateMarketData(){
     //log("DEBUG", "updateMarketData");
 
-    const json result = getMarket(system_symbol, delivery_waypoint_symbol);
+    const json result = getMarket(current_system_symbol, delivery_waypoint_symbol);
 
     if (result.contains("error")){
         log("ERROR", "updateMarketData result contains error");
         return;
     }
 
-    market_data = result;
+    cached_market_data = result;
     log("INFO", "updateMarketData updated market data");
 }
 
@@ -890,7 +923,7 @@ void applyRoleSurveyor(const json &ship_json){
         scoreSurveysForTargetFarming(target_resource);
 
         // if we have market data, score the surveys by value
-		if (!market_data.is_null()){
+		if (!cached_market_data.is_null()){
 			scoreSurveysForProfitability();
 		}
 
@@ -981,7 +1014,7 @@ void applyRoleMiner(const json &ship_json){
         }
         const string extracted_resource_symbol = result["extraction"]["yield"]["symbol"];
         const int extracted_resource_units = result["extraction"]["yield"]["units"];
-        const json cargo = result["cargo"];
+        cargo = result["cargo"];
                 
         // immidiately jettison anything which is not on the resource_keep_list
         if (!isItemWorthKeeping(extracted_resource_symbol)){
@@ -996,12 +1029,42 @@ void applyRoleMiner(const json &ship_json){
     }
 }
 
-void applyRoleSatellite(const json &ship_json){
+void applyRoleShipBuyer(const json &ship_json){
+
+    if (!ship_json["symbol"].is_string()){
+        log("ERROR", "applyRoleShipBuyer ship_json['symbol'] is not a string");
+        return;
+    }
 
     const string ship_symbol = ship_json["symbol"];
 
     if (isShipInTransit(ship_json)){
         return;
+    }
+
+    if (number_of_satellites < desired_number_of_satellites){
+        // buy satellite
+        if (isShipAtWaypoint(ship_json, satellite_shipyard_symbol)){
+            if (!isShipDocked(ship_json)){
+                dockShip(callsign, ship_symbol);
+                http_calls++;
+            }
+            if (isShipAffordable("SHIP_PROBE", satellite_shipyard_symbol)){
+                purchaseShip(callsign, "SHIP_PROBE", satellite_shipyard_symbol);
+                http_calls++;
+            }
+            return;
+ 
+        } else {
+            // ship is not at satellite_shipyard_symbol
+            if (isShipDocked(ship_json)){
+                orbitShip(callsign, ship_symbol);
+                http_calls++;
+            }
+            navigateShip(callsign, ship_symbol, satellite_shipyard_symbol);
+            http_calls++;
+            return;
+        }
     }
 
     if (surveyor_to_miner_ratio < desired_surveyor_to_miner_ratio){
@@ -1106,6 +1169,34 @@ void applyRoleSatellite(const json &ship_json){
     log("INFO", ship_symbol + " | Beep Boop, im a SATELLITE");
 }
 
+void applyRoleMarketWatcher(const json &ship_json){
+    if (!ship_json["symbol"].is_string()){
+        log("ERROR", "applyRoleHauler ship_json['symbol'] is not a string");
+        return;
+    }
+
+    const string ship_symbol = ship_json["symbol"];
+
+    if (isShipInTransit(ship_json)){
+        return;
+    }
+
+    if (!isShipAtWaypoint(ship_json, delivery_waypoint_symbol)){
+        if(isShipDocked(ship_json)){
+            orbitShip(callsign, ship_symbol);
+        }
+        navigateShip(callsign, ship_symbol, delivery_waypoint_symbol);
+    } else {
+        // ship is at delivery waypoint symbol
+        if(!isShipDocked(ship_json)){
+            dockShip(callsign, ship_symbol);
+        }
+        updateMarketData();
+        http_calls++;
+    }
+
+}
+
 void applyRoleHauler(const json &ship_json){
     //log("DEBUG", "applyRoleHauler");
 
@@ -1151,14 +1242,7 @@ void applyRoleHauler(const json &ship_json){
                 http_calls++; 
             }
 
-            updateMarketData();
-            http_calls++;
-
-            int credits_per_cargo_unit = creditsPerCargoUnit(market_data, cargo);
-
-
-
-            if (!market_data.is_null()){
+            if (!cached_market_data.is_null()){
 			    scoreSurveysForProfitability();
             }
             if (!isContractFulfilled(target_contract)){
@@ -1191,7 +1275,7 @@ void applyRoleHauler(const json &ship_json){
                 const json post_deliver_inventory = deliver_result["cargo"]["inventory"];
                 for (json item: post_deliver_inventory){
                     string cargo_symbol = item["symbol"];
-                    int units = cargoCount(post_deliver_inventory, cargo_symbol);
+                    units = cargoCount(post_deliver_inventory, cargo_symbol);
                     sellCargo(ship_symbol, cargo_symbol, units);
                     http_calls++;
                 }
@@ -1205,7 +1289,7 @@ void applyRoleHauler(const json &ship_json){
                 http_calls++;
                 return;
             } else {
-
+                int credits_per_cargo_unit = creditsPerCargoUnit(cached_market_data, cargo);
                 if (credits_per_cargo_unit < desired_credits_per_cargo_unit){
                     log("INFO", "Credits per cargo unit too low, gonna wait till the price recovers, boss.");
                     return;
@@ -1216,8 +1300,15 @@ void applyRoleHauler(const json &ship_json){
                 for (json item: inventory){
                     string cargo_symbol = item["symbol"];
                     int units = cargoCount(inventory, cargo_symbol);
-                    sellCargo(ship_symbol, cargo_symbol, units);
-                    http_calls++;
+                    int tradeVolume = tradeVolumeOf(cached_market_data, cargo_symbol);
+                    if (units >= tradeVolume){
+                        sellCargo(ship_symbol, cargo_symbol, tradeVolume);
+                        sellCargo(ship_symbol, cargo_symbol, units - tradeVolume);
+                    } else {
+                        sellCargo(ship_symbol, cargo_symbol, units);
+                        http_calls++;
+                    }
+
                 }
                 // once everything is sold, head back to the belt
                 // Only do this if its needed
@@ -1311,8 +1402,12 @@ void shipRoleApplicator(const json &ship_json){
             return;
         }
         if (role == "SATELLITE"){
-            applyRoleSatellite(ship_json);
-            return;
+            if (!buyer_satellite_exists){
+                applyRoleShipBuyer(ship_json);
+                buyer_satellite_exists = true;
+                return;
+            }
+            applyRoleMarketWatcher(ship_json);
         }
         if (role == "EXCAVATOR"){
             applyRoleMiner(ship_json);
