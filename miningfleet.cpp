@@ -1472,6 +1472,7 @@ int main(int argc, char* argv[])
 
         int delay_between_ships = turn_length / number_of_ships;
 
+        number_of_satellites = countShipsByRole(ships, "SATELLITE");
         number_of_surveyor_ships = countShipsByRole(ships, "SURVEYOR");
         number_of_shuttles = countShipsByRole(ships, "TRANSPORT");
         number_of_mining_ships = countShipsByRole(ships, "EXCAVATOR");
@@ -1492,6 +1493,9 @@ int main(int argc, char* argv[])
             cout << endl;
             sleep(delay_between_ships);
         }
+
+        // reset this to false so that first satellite becomes buyer next turn
+        buyer_satellite_exists = false;
 
         int calls_per_minute = http_calls / 1.5;
 
